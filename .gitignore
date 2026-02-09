@@ -4,3 +4,12 @@ dist/
 .env.*
 *.log
 coverage/
+.cache/
+node_*.json
+node_batch*.json
+node_run*.json
+node_forced_*.json
+node_rate_limit_*.json
+results_*.json
+direct_*.json
+*trace*.log
