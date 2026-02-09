@@ -13,3 +13,12 @@ node_rate_limit_*.json
 results_*.json
 direct_*.json
 *trace*.log
+runs/
+stage1_batch*.json
+stage1_trace*.log
+metrics_partial.json
+metrics_summary.json
+runs/
+reg_trace_*.log
+stage2_*.json
+metrics_*.json

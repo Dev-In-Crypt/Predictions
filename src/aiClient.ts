@@ -5,6 +5,8 @@ export interface PredictionResult {
   explanation: string;
   model: string;
   rawText: string;
+  sanitizeUsed: boolean;
+  retryUsed: boolean;
 }
 
 interface OpenAIResponse {
@@ -31,15 +33,6 @@ function extractText(response: OpenAIResponse): string | null {
         return content.text;
       }
     }
-  }
-  return null;
-}
-
-function normalizeProbability(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) return parsed;
   }
   return null;
 }
@@ -84,8 +77,11 @@ function validateReport(payload: Record<string, unknown>): ValidationResult {
       return { ok: false, reason: "invalid key_facts.stance" };
     }
     const sources = obj?.sources;
-    if (!isStringArray(sources) || sources.length < 1) {
-      return { ok: false, reason: "key_facts.sources must have 1+ urls" };
+    const support = obj?.support;
+    const hasSources = isStringArray(sources) && sources.length > 0;
+    const hasMarketTextSupport = support === "market_text";
+    if (!hasSources && !hasMarketTextSupport) {
+      return { ok: false, reason: "key_facts requires sources or support=market_text" };
     }
   }
 
@@ -102,6 +98,27 @@ function validateReport(payload: Record<string, unknown>): ValidationResult {
   return { ok: true };
 }
 
+function ensureTwoItems(arr: unknown, fallback: string): string[] {
+  const items = Array.isArray(arr) ? arr.filter((v) => typeof v === "string") : [];
+  const normalized = items.slice(0, 2);
+  while (normalized.length < 2) {
+    normalized.push(fallback);
+  }
+  return normalized;
+}
+
+function normalizeReport(payload: Record<string, unknown>): Record<string, unknown> {
+  const quick = (payload.quick_view as Record<string, unknown>) ?? {};
+  const top = (quick.top_drivers as Record<string, unknown>) ?? {};
+  const fallback = "unknown / needs confirmation";
+  quick.top_drivers = {
+    pro: ensureTwoItems(top.pro, fallback),
+    con: ensureTwoItems(top.con, fallback),
+  };
+  payload.quick_view = quick;
+  return payload;
+}
+
 export async function requestPrediction(
   params: {
     apiKey: string;
@@ -111,6 +128,7 @@ export async function requestPrediction(
     prompt: string;
     responseFormat?: "json_object" | "none";
     maxRetries?: number;
+    timeoutMs?: number;
   },
 ): Promise<PredictionResult> {
   const model = params.model ?? "gpt-4o-mini";
@@ -118,7 +136,7 @@ export async function requestPrediction(
   const baseUrl =
     params.baseUrl ?? (provider === "openrouter" ? "https://openrouter.ai" : "https://api.openai.com");
   const responseFormat = params.responseFormat ?? (provider === "openrouter" ? "none" : "json_object");
-  const maxRetries = params.maxRetries ?? 1;
+  const maxRetries = params.maxRetries ?? 2;
 
   async function callModel(prompt: string): Promise<{ rawText: string; modelName: string }> {
     const endpoint = provider === "openrouter" ? "/api/v1/chat/completions" : "/v1/responses";
@@ -147,11 +165,17 @@ export async function requestPrediction(
       headers["X-Title"] = "Polymarket Market Analysis MVP";
     }
 
+    const controller = params.timeoutMs ? new AbortController() : undefined;
+    const timeoutId =
+      params.timeoutMs && controller ? setTimeout(() => controller.abort(), params.timeoutMs) : undefined;
+
     const res = await fetch(`${baseUrl}${endpoint}`, {
       method: "POST",
       headers,
       body: JSON.stringify(bodyPayload),
+      signal: controller?.signal,
     });
+    if (timeoutId) clearTimeout(timeoutId);
 
     if (!res.ok) {
       const text = await res.text();
@@ -175,6 +199,9 @@ export async function requestPrediction(
   let lastRaw = "";
   let lastModel = model;
   let lastReason = "";
+  let sanitizeUsed = false;
+  let retryUsed = false;
+  let parseRetryCount = 0;
   while (attempt <= maxRetries) {
     const prompt = attempt === 0 ? params.prompt : `${params.prompt}\n\n${correction}`;
     const { rawText, modelName } = await callModel(prompt);
@@ -182,6 +209,7 @@ export async function requestPrediction(
     lastModel = modelName;
 
     const sanitized = stripMarkdownCodeFences(rawText);
+    if (sanitized !== rawText) sanitizeUsed = true;
     let parsed = safeJsonParse<Record<string, unknown>>(sanitized);
     if (!parsed) {
       const extracted = extractJsonObject(sanitized);
@@ -191,24 +219,39 @@ export async function requestPrediction(
     }
     if (!parsed) {
       lastReason = "invalid JSON";
-      attempt += 1;
-      continue;
+      retryUsed = true;
+      parseRetryCount += 1;
+      if (parseRetryCount <= 2 && attempt < maxRetries) {
+        attempt += 1;
+        continue;
+      }
+      break;
     }
 
-    const validation = validateReport(parsed);
+    const normalized = normalizeReport(parsed);
+    const validation = validateReport(normalized);
     if (!validation.ok) {
       lastReason = validation.reason;
-      attempt += 1;
-      continue;
+      retryUsed = true;
+      if (attempt < 1) {
+        attempt += 1;
+        continue;
+      }
+      break;
     }
 
     return {
       probability: 0,
       explanation: "Structured report returned.",
       model: modelName,
-      rawText: sanitized,
+      rawText: JSON.stringify(normalized),
+      sanitizeUsed,
+      retryUsed: attempt > 0 || retryUsed,
     };
   }
 
-  throw new Error(`AI output failed validation (${lastReason}): ${lastRaw}`);
+  const error = new Error(`AI output failed validation (${lastReason}): ${lastRaw}`);
+  (error as { sanitizeUsed?: boolean; retryUsed?: boolean }).sanitizeUsed = sanitizeUsed;
+  (error as { sanitizeUsed?: boolean; retryUsed?: boolean }).retryUsed = retryUsed;
+  throw error;
 }
