@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/main.js",
-    "dev": "tsx src/main.ts"
+    "dev": "tsx src/main.ts",
+    "service": "tsx src/service.ts"
   },
   "devDependencies": {
     "dotenv": "^16.4.0",

@@ -23,11 +23,54 @@ export interface MarketData {
   sides?: MarketSide[];
   bbo?: Record<string, unknown>;
   raw?: Record<string, unknown>;
+  resolvedVia?: string;
 }
 
 const DEFAULT_GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 
-async function fetchJson<T>(url: string, options?: { signal?: AbortSignal }): Promise<T> {
+interface GammaFetchOptions {
+  signal?: AbortSignal;
+  delayMs?: number;
+}
+
+type GammaErrorCode = "NOT_FOUND" | "NETWORK_ERROR";
+
+class GammaFetchError extends Error {
+  status?: number;
+  retryable: boolean;
+  code: GammaErrorCode;
+
+  constructor(message: string, options: { status?: number; retryable: boolean; code: GammaErrorCode }) {
+    super(message);
+    this.name = "GammaFetchError";
+    this.status = options.status;
+    this.retryable = options.retryable;
+    this.code = options.code;
+  }
+}
+
+let lastGammaRequestAt = 0;
+
+async function enforceGammaDelay(delayMs?: number): Promise<void> {
+  if (!delayMs || delayMs <= 0) return;
+  const now = Date.now();
+  const wait = delayMs - (now - lastGammaRequestAt);
+  if (wait > 0) {
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  lastGammaRequestAt = Date.now();
+}
+
+function isNotFoundStatus(status: number): boolean {
+  return status === 404 || status === 410;
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+async function fetchJson<T>(url: string, options?: GammaFetchOptions): Promise<T> {
+  await enforceGammaDelay(options?.delayMs);
   const res = await fetch(url, {
     headers: {
       "Accept": "application/json",
@@ -36,7 +79,14 @@ async function fetchJson<T>(url: string, options?: { signal?: AbortSignal }): Pr
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Polymarket API error (${res.status}): ${text}`);
+    const status = res.status;
+    const code: GammaErrorCode = isNotFoundStatus(status) ? "NOT_FOUND" : "NETWORK_ERROR";
+    const retryable = isRetryableStatus(status);
+    throw new GammaFetchError(`Polymarket API error (${status}): ${text}`, {
+      status,
+      retryable,
+      code,
+    });
   }
   return (await res.json()) as T;
 }
@@ -44,7 +94,7 @@ async function fetchJson<T>(url: string, options?: { signal?: AbortSignal }): Pr
 export async function fetchMarketBySlug(
   slug: string,
   baseUrl = DEFAULT_GAMMA_BASE_URL,
-  options?: { signal?: AbortSignal },
+  options?: GammaFetchOptions,
 ): Promise<Record<string, unknown>> {
   return fetchJson<Record<string, unknown>>(
     `${baseUrl}/markets/slug/${encodeURIComponent(slug)}`,
@@ -55,7 +105,7 @@ export async function fetchMarketBySlug(
 export async function fetchMarketById(
   id: string,
   baseUrl = DEFAULT_GAMMA_BASE_URL,
-  options?: { signal?: AbortSignal },
+  options?: GammaFetchOptions,
 ): Promise<Record<string, unknown>> {
   return fetchJson<Record<string, unknown>>(`${baseUrl}/markets/${encodeURIComponent(id)}`, options);
 }
@@ -63,7 +113,7 @@ export async function fetchMarketById(
 export async function fetchEventBySlug(
   slug: string,
   baseUrl = DEFAULT_GAMMA_BASE_URL,
-  options?: { signal?: AbortSignal },
+  options?: GammaFetchOptions,
 ): Promise<Record<string, unknown>> {
   try {
     return await fetchJson<Record<string, unknown>>(
@@ -71,6 +121,9 @@ export async function fetchEventBySlug(
       options,
     );
   } catch (err) {
+    if (err instanceof GammaFetchError && err.code !== "NOT_FOUND") {
+      throw err;
+    }
     const fallback = await fetchJson<Record<string, unknown>[]>(
       `${baseUrl}/events?slug=${encodeURIComponent(slug)}`,
       options,
@@ -87,106 +140,121 @@ export async function fetchMarketData(params: {
   marketIndex?: number;
   gammaBaseUrl?: string;
   signal?: AbortSignal;
+  gammaDelayMs?: number;
 }): Promise<MarketData> {
   const gammaBaseUrl = params.gammaBaseUrl ?? DEFAULT_GAMMA_BASE_URL;
+  const delayMs = params.gammaDelayMs ?? 0;
+  const fetchOptions = { signal: params.signal, delayMs };
   let market: Record<string, unknown>;
-  if (params.eventSlug) {
-    let eventSlug = params.eventSlug;
-    let marketSlugFromPath: string | undefined;
-    if (eventSlug.includes("/")) {
-      const [eventPart, marketPart] = eventSlug.split("/", 2);
-      eventSlug = eventPart;
-      marketSlugFromPath = marketPart;
+  let resolvedVia: string | undefined;
+  const normalizeMarket = (
+    raw: Record<string, unknown>,
+    fallbackSlug?: string,
+    resolvedVia?: string,
+  ): MarketData => {
+    return {
+      id: String(raw.id ?? raw.marketId ?? ""),
+      slug: typeof raw.slug === "string" ? raw.slug : fallbackSlug,
+      question: typeof raw.question === "string" ? raw.question : undefined,
+      description: typeof raw.description === "string" ? raw.description : undefined,
+      resolutionCriteria:
+        typeof raw.resolutionCriteria === "string" ? raw.resolutionCriteria : undefined,
+      endDate:
+        typeof raw.endDate === "string"
+          ? raw.endDate
+          : typeof raw.closeDate === "string"
+            ? raw.closeDate
+            : undefined,
+      category: typeof raw.category === "string" ? raw.category : undefined,
+      subcategory: typeof raw.subcategory === "string" ? raw.subcategory : undefined,
+      outcomes: normalizeStringArray(raw.outcomes),
+      outcomePrices: normalizeNumberArray(raw.outcomePrices),
+      sides: undefined,
+      bbo: undefined,
+      raw,
+      resolvedVia,
+    };
+  };
+
+  const lookupBySlug = async (inputSlug: string): Promise<MarketData> => {
+    if (inputSlug.includes("/")) {
+      const [eventPart, marketPart] = inputSlug.split("/", 2);
+      const event = await fetchEventBySlug(eventPart, gammaBaseUrl, fetchOptions);
+      const markets = Array.isArray((event as { markets?: unknown }).markets)
+        ? ((event as { markets?: unknown }).markets as Record<string, unknown>[])
+        : [];
+      if (markets.length === 0) {
+        throw new GammaFetchError("Event has no markets.", {
+          retryable: false,
+          code: "NOT_FOUND",
+        });
+      }
+      const selected = markets.find(
+        (m) => typeof m.slug === "string" && m.slug === marketPart,
+      );
+      if (!selected) {
+        throw new GammaFetchError("Market not found in event.", {
+          retryable: false,
+          code: "NOT_FOUND",
+        });
+      }
+      const marketSlug = typeof selected.slug === "string" ? selected.slug : undefined;
+      const marketId = typeof selected.id === "string" ? selected.id : undefined;
+      if (marketSlug) {
+        const fullMarket = await fetchMarketBySlug(marketSlug, gammaBaseUrl, fetchOptions);
+        return normalizeMarket(fullMarket, marketSlug, "event_market_slug");
+      }
+      if (marketId) {
+        const fullMarket = await fetchMarketById(marketId, gammaBaseUrl, fetchOptions);
+        return normalizeMarket(fullMarket, marketPart, "event_market_id");
+      }
+      return normalizeMarket(selected, marketPart, "event_market_inline");
     }
 
-    let event: Record<string, unknown> | null = null;
-    let directMarket: Record<string, unknown> | null = null;
     try {
-      event = await fetchEventBySlug(eventSlug, gammaBaseUrl, { signal: params.signal });
+      const directMarket = await fetchMarketBySlug(inputSlug, gammaBaseUrl, fetchOptions);
+      return normalizeMarket(directMarket, inputSlug, "market_slug");
     } catch (err) {
-      if (marketSlugFromPath) {
-        try {
-          directMarket = await fetchMarketBySlug(marketSlugFromPath, gammaBaseUrl, {
-            signal: params.signal,
-          });
-          event = null;
-        } catch {
-          throw err;
-        }
-      } else {
-        try {
-          directMarket = await fetchMarketBySlug(eventSlug, gammaBaseUrl, {
-            signal: params.signal,
-          });
-          event = null;
-        } catch {
-          throw err;
-        }
-      }
-      if (!event && !directMarket) {
+      if (!(err instanceof GammaFetchError) || err.code !== "NOT_FOUND") {
         throw err;
       }
     }
-    if (!event && directMarket) {
-      return {
-        id: String(directMarket.id ?? directMarket.marketId ?? ""),
-        slug: typeof directMarket.slug === "string" ? directMarket.slug : marketSlugFromPath,
-        question: typeof directMarket.question === "string" ? directMarket.question : undefined,
-        description:
-          typeof directMarket.description === "string" ? directMarket.description : undefined,
-        resolutionCriteria:
-          typeof directMarket.resolutionCriteria === "string"
-            ? directMarket.resolutionCriteria
-            : undefined,
-        endDate:
-          typeof directMarket.endDate === "string"
-            ? directMarket.endDate
-            : typeof directMarket.closeDate === "string"
-              ? directMarket.closeDate
-              : undefined,
-        category: typeof directMarket.category === "string" ? directMarket.category : undefined,
-        subcategory:
-          typeof directMarket.subcategory === "string" ? directMarket.subcategory : undefined,
-        outcomes: normalizeStringArray(directMarket.outcomes),
-        outcomePrices: normalizeNumberArray(directMarket.outcomePrices),
-        sides: undefined,
-        bbo: undefined,
-        raw: directMarket,
-      };
-    }
 
+    const event = await fetchEventBySlug(inputSlug, gammaBaseUrl, fetchOptions);
     const markets = Array.isArray((event as { markets?: unknown }).markets)
       ? ((event as { markets?: unknown }).markets as Record<string, unknown>[])
       : [];
     if (markets.length === 0) {
-      throw new Error("Event has no markets.");
+      throw new GammaFetchError("Event has no markets.", {
+        retryable: false,
+        code: "NOT_FOUND",
+      });
     }
-    let selected: Record<string, unknown> | undefined;
-    if (marketSlugFromPath) {
-      selected = markets.find(
-        (m) => typeof m.slug === "string" && m.slug === marketSlugFromPath,
-      );
+    const index = params.marketIndex ?? 0;
+    if (index < 0 || index >= markets.length) {
+      throw new Error(`Event market index out of range. Max index: ${markets.length - 1}`);
     }
-    if (!selected) {
-      const index = params.marketIndex ?? 0;
-      if (index < 0 || index >= markets.length) {
-        throw new Error(`Event market index out of range. Max index: ${markets.length - 1}`);
-      }
-      selected = markets[index];
-    }
+    const selected = markets[index];
     const marketSlug = typeof selected.slug === "string" ? selected.slug : undefined;
     const marketId = typeof selected.id === "string" ? selected.id : undefined;
     if (marketSlug) {
-      market = await fetchMarketBySlug(marketSlug, gammaBaseUrl, { signal: params.signal });
-    } else if (marketId) {
-      market = await fetchMarketById(marketId, gammaBaseUrl, { signal: params.signal });
-    } else {
-      market = selected;
+      const fullMarket = await fetchMarketBySlug(marketSlug, gammaBaseUrl, fetchOptions);
+      return normalizeMarket(fullMarket, marketSlug, "event_index");
     }
+    if (marketId) {
+      const fullMarket = await fetchMarketById(marketId, gammaBaseUrl, fetchOptions);
+      return normalizeMarket(fullMarket, inputSlug, "event_index");
+    }
+    return normalizeMarket(selected, inputSlug, "event_index");
+  };
+
+  if (params.id) {
+    market = await fetchMarketById(params.id, gammaBaseUrl, fetchOptions);
+    resolvedVia = "market_id";
   } else if (params.slug) {
-    market = await fetchMarketBySlug(params.slug, gammaBaseUrl, { signal: params.signal });
-  } else if (params.id) {
-    market = await fetchMarketById(params.id, gammaBaseUrl, { signal: params.signal });
+    return await lookupBySlug(params.slug);
+  } else if (params.eventSlug) {
+    return await lookupBySlug(params.eventSlug);
   } else {
     throw new Error("Provide either a market slug, market id, or event slug.");
   }
@@ -217,5 +285,6 @@ export async function fetchMarketData(params: {
     sides: undefined,
     bbo: undefined,
     raw: market,
+    resolvedVia,
   };
 }

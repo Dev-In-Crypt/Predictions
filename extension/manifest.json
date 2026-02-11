@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Polymarket Analyzer (Stage 1)",
+  "version": "0.1.0",
+  "description": "Minimal MV3 bridge to local analyzer service.",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://127.0.0.1:8787/*"],
+  "action": {
+    "default_title": "Analyze market"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://polymarket.com/event/*",
+        "https://*.polymarket.com/event/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}

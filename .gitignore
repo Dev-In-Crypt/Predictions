@@ -22,3 +22,5 @@ runs/
 reg_trace_*.log
 stage2_*.json
 metrics_*.json
+data/
+scripts/
