@@ -20,16 +20,22 @@ export interface ErrorEnvelope {
   schema_version?: string;
   timestamp_utc?: string;
   resolved_via?: "market_slug" | "event_index" | "event_market_path";
-  cache?: { hit: boolean; ttl_sec: number };
+  cache?: CacheMeta;
   attempts?: number;
   sources_count?: number;
+}
+
+export interface CacheMeta {
+  hit: boolean;
+  ttl_sec: number;
+  expires_at_utc?: string;
 }
 
 export type SuccessPayload = Record<string, unknown> & {
   schema_version?: string;
   timestamp_utc?: string;
   resolved_via?: "market_slug" | "event_index" | "event_market_path";
-  cache?: { hit: boolean; ttl_sec: number };
+  cache?: CacheMeta;
 };
 
 export type AnalysisResult =
@@ -225,6 +231,11 @@ function parseTimestampUtc(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function computeExpiresAtUtc(baseMs: number, ttlSec: number): string {
+  const ttlMs = Math.max(0, ttlSec) * 1000;
+  return new Date(baseMs + ttlMs).toISOString();
+}
+
 async function readCache(key: string): Promise<{ payload: SuccessPayload; ttlRemaining: number } | null> {
   try {
     const raw = await readFile(cacheFileForKey(key), "utf-8");
@@ -255,14 +266,18 @@ function resolveVia(input: AnalysisInput): "market_slug" | "event_index" | "even
 function withEnvelopeMeta<T extends ErrorEnvelope | SuccessPayload>(
   payload: T,
   resolvedVia: "market_slug" | "event_index" | "event_market_path",
-  cache: { hit: boolean; ttl_sec: number },
+  cache: CacheMeta,
 ): T {
   payload.schema_version = SCHEMA_VERSION;
   if (!payload.timestamp_utc) {
     payload.timestamp_utc = new Date().toISOString();
   }
   payload.resolved_via = resolvedVia;
-  payload.cache = cache;
+  const timestampMs = Date.parse(payload.timestamp_utc);
+  payload.cache = {
+    ...cache,
+    expires_at_utc: computeExpiresAtUtc(Number.isFinite(timestampMs) ? timestampMs : Date.now(), cache.ttl_sec),
+  };
   return payload;
 }
 
@@ -274,7 +289,11 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
     debugLog("cache: hit");
     cached.payload.resolved_via = resolvedVia;
     cached.payload.schema_version = SCHEMA_VERSION;
-    cached.payload.cache = { hit: true, ttl_sec: cached.ttlRemaining };
+    cached.payload.cache = {
+      hit: true,
+      ttl_sec: cached.ttlRemaining,
+      expires_at_utc: computeExpiresAtUtc(Date.now(), cached.ttlRemaining),
+    };
     return { status: "success", payload: cached.payload };
   }
 

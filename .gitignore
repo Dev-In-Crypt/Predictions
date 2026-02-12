@@ -24,3 +24,5 @@ stage2_*.json
 metrics_*.json
 data/
 scripts/
+*.crx
+*.pem

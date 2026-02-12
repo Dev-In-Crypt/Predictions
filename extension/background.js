@@ -13,6 +13,20 @@ async function analyzeSlug(slug) {
   return await res.json();
 }
 
+async function notifyResult(slug, result) {
+  const isError = result?.status === "error";
+  const title = isError ? "Analysis failed" : "Analysis ready";
+  const confidence = result?.quick_view?.confidence;
+  const message = isError
+    ? result?.message ?? "Analyzer returned an error."
+    : `${slug}${confidence ? ` (${confidence})` : ""}`;
+
+  chrome.action.setBadgeText({ text: isError ? "ERR" : "OK" });
+  chrome.action.setBadgeBackgroundColor({ color: isError ? "#B91C1C" : "#15803D" });
+  chrome.action.setTitle({ title: `${title}: ${message}` });
+  setTimeout(() => chrome.action.setBadgeText({ text: "" }), 2500);
+}
+
 chrome.action.onClicked.addListener(async () => {
   const tab = await getActiveTab();
   if (!tab?.id) {
@@ -42,7 +56,9 @@ chrome.action.onClicked.addListener(async () => {
       last_slug: slug,
       last_updated: Date.now(),
     });
+    await notifyResult(slug, result);
   } catch (err) {
     console.error("Analyzer request failed.", err);
+    await notifyResult(slug, { status: "error", message: "Analyzer request failed." });
   }
 });

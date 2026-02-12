@@ -6,7 +6,8 @@
     "build": "tsc",
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
-    "service": "tsx src/service.ts"
+    "service": "tsx src/service.ts",
+    "smoke:service": "node scripts/smoke_service.mjs"
   },
   "devDependencies": {
     "dotenv": "^16.4.0",

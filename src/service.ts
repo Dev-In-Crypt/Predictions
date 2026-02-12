@@ -5,6 +5,7 @@ import { analyzeMarket } from "./analyzer.js";
 const SCHEMA_VERSION = "1.0";
 
 function buildServiceError(message: string, errorCode = "BAD_REQUEST") {
+  const timestamp = new Date().toISOString();
   return {
     status: "error",
     step: "overall",
@@ -12,9 +13,9 @@ function buildServiceError(message: string, errorCode = "BAD_REQUEST") {
     message,
     retryable: false,
     schema_version: SCHEMA_VERSION,
-    timestamp_utc: new Date().toISOString(),
+    timestamp_utc: timestamp,
     resolved_via: "event_index",
-    cache: { hit: false, ttl_sec: 0 },
+    cache: { hit: false, ttl_sec: 0, expires_at_utc: timestamp },
   };
 }
 

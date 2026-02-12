@@ -31,6 +31,37 @@ It listens on `http://127.0.0.1:8787/analyze?slug=<event-slug-or-path>`.
 
 Extension skeleton lives in `extension/` (load unpacked in Chrome).
 
+## Quick validations
+### Smoke: service JSON contract
+1. Start the service:
+```
+npm run service
+```
+2. In another shell:
+```
+npm run smoke:service
+```
+The smoke check calls the local service for the first `type=event` gold slug and asserts:
+`schema_version`, `timestamp_utc`, `resolved_via`, `cache.hit`, and required `quick_view` fields.
+
+### Manual: extension flow checklist (content → background → service → chrome.storage)
+Use these 5 gold slugs (one includes `/`):
+- `macron-out-in-2025`
+- `will-trump-deport-750000-or-more-people-in-2025`
+- `what-will-happen-before-gta-vi`
+- `gta-vi-released-before-june-2026`
+- `what-will-happen-before-gta-vi/gta-vi-released-before-june-2026` (event/market path)
+
+Checklist per slug:
+1. Open `https://polymarket.com/event/<slug>` (for the `/` slug, paste it directly after `/event/`).
+2. Click the extension action (pin it for easy access).
+3. Confirm a small notification or badge appears.
+4. In DevTools → Application → Storage → `chrome.storage`, verify `last_slug` matches the page,
+   `last_updated` is recent, and `last_analysis.schema_version`, `timestamp_utc`, `resolved_via`,
+   `cache.hit`, `cache.expires_at_utc`, plus `last_analysis.quick_view.estimate_yes_pct`,
+   `range_yes_pct`, `confidence`, `market_yes_pct`, `delta_vs_market_pp`, `top_drivers`,
+   `one_sentence_take` are present.
+
 ## Environment Variables
 - `AI_API_KEY` (required)
 - `AI_PROVIDER` (`openai` or `openrouter`, default: `openai`)
