@@ -1,0 +1,137 @@
+﻿:root {
+  color-scheme: light;
+  --bg: #f5f3ef;
+  --panel: #ffffff;
+  --ink: #1d1b16;
+  --muted: #6f6a60;
+  --accent: #0f6d5e;
+  --accent-ink: #ffffff;
+  --border: #e2ddd4;
+  --error: #b3261e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Sora", "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+}
+
+.app {
+  width: 360px;
+  padding: 16px;
+}
+
+header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.meta-line {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+}
+
+.value {
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.value.multiline {
+  text-align: left;
+  white-space: pre-wrap;
+  overflow: visible;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.primary {
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.primary:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(15, 109, 94, 0.2);
+}
+
+.status {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--error);
+  border-color: rgba(179, 38, 30, 0.4);
+}
+
+.hidden {
+  display: none;
+}

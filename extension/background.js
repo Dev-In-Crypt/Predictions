@@ -27,11 +27,10 @@ async function notifyResult(slug, result) {
   setTimeout(() => chrome.action.setBadgeText({ text: "" }), 2500);
 }
 
-chrome.action.onClicked.addListener(async () => {
+async function runAnalysisForActiveTab() {
   const tab = await getActiveTab();
   if (!tab?.id) {
-    console.warn("No active tab found.");
-    return;
+    throw new Error("No active tab found.");
   }
 
   let slug;
@@ -39,26 +38,42 @@ chrome.action.onClicked.addListener(async () => {
     const response = await requestSlug(tab.id);
     slug = response?.slug;
   } catch (err) {
-    console.warn("Failed to contact content script.", err);
-    return;
+    throw new Error("Failed to contact content script.");
   }
 
   if (!slug) {
-    console.warn("No Polymarket slug found on this page.");
-    return;
+    throw new Error("No Polymarket slug found on this page.");
   }
 
   try {
     const result = await analyzeSlug(slug);
-    console.log("Analyzer result:", result);
     await chrome.storage.local.set({
       last_analysis: result,
       last_slug: slug,
       last_updated: Date.now(),
     });
     await notifyResult(slug, result);
+    return { slug, result };
   } catch (err) {
-    console.error("Analyzer request failed.", err);
     await notifyResult(slug, { status: "error", message: "Analyzer request failed." });
+    throw err;
   }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "RUN_ANALYSIS") {
+    return;
+  }
+
+  (async () => {
+    const data = await runAnalysisForActiveTab();
+    return { ok: true, ...data };
+  })()
+    .then(sendResponse)
+    .catch((err) => {
+      console.error("Popup analysis failed.", err);
+      sendResponse({ ok: false, error: err?.message ?? String(err) });
+    });
+
+  return true;
 });

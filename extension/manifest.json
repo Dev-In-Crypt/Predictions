@@ -6,7 +6,8 @@
   "permissions": ["activeTab", "storage"],
   "host_permissions": ["http://127.0.0.1:8787/*"],
   "action": {
-    "default_title": "Analyze market"
+    "default_title": "Analyze market",
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "background.js",

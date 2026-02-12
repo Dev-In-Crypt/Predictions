@@ -1,0 +1,74 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polymarket Analyzer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div class="title">Polymarket Analyzer</div>
+        <div id="meta" class="meta-line">—</div>
+      </header>
+
+      <section id="success" class="block hidden">
+        <div class="row">
+          <div class="label">Estimate YES %</div>
+          <div id="estimate" class="value">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Range YES %</div>
+          <div id="range" class="value">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Confidence</div>
+          <div id="confidence" class="value">—</div>
+        </div>
+        <div class="row">
+          <div class="label">One sentence take</div>
+          <div id="take" class="value multiline">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Top drivers (pro)</div>
+          <div id="driversPro" class="value multiline">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Top drivers (con)</div>
+          <div id="driversCon" class="value multiline">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Cache hit</div>
+          <div id="cacheHit" class="value">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Cache expires</div>
+          <div id="cacheExpires" class="value">—</div>
+        </div>
+      </section>
+
+      <section id="error" class="block error hidden">
+        <div class="row">
+          <div class="label">Step</div>
+          <div id="errorStep" class="value">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Error code</div>
+          <div id="errorCode" class="value">—</div>
+        </div>
+        <div class="row">
+          <div class="label">Message</div>
+          <div id="errorMessage" class="value multiline">—</div>
+        </div>
+      </section>
+
+      <div class="controls">
+        <button id="run" class="primary">Analyze current page</button>
+        <div id="status" class="status muted">Ready</div>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
