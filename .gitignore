@@ -26,3 +26,10 @@ data/
 scripts/
 *.crx
 *.pem
+.DS_Store
+Thumbs.db
+*.key
+*.sqlite
+*.db
+*.tgz
+*.zip

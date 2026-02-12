@@ -6,6 +6,16 @@ Minimal Node.js/TypeScript script that fetches Polymarket market data, sends it 
 1. `npm install`
 2. Create `.env` using `.env.example` as a template.
 
+## Smoke
+Terminal A:
+```
+npm run service
+```
+Terminal B:
+```
+npm run smoke:health && npm run smoke:service
+```
+
 ## Run
 ### By event slug
 ```
@@ -29,6 +39,20 @@ npm run service
 ```
 It listens on `http://127.0.0.1:8787/analyze?slug=<event-slug-or-path>`.
 
+### /health contract (stable)
+`GET /health` returns a small JSON payload and must not call the analyzer:
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "service_version": "1.0.0",
+  "time_utc": "2026-02-12T17:42:31.123Z",
+  "uptime_sec": 42
+}
+```
+- `time_utc` is ISO-8601 UTC (ending in `Z`).
+- `uptime_sec` is integer seconds since process start.
+
 Extension skeleton lives in `extension/` (load unpacked in Chrome).
 
 ## Quick validations
@@ -43,6 +67,32 @@ npm run smoke:service
 ```
 The smoke check calls the local service for the first `type=event` gold slug and asserts:
 `schema_version`, `timestamp_utc`, `resolved_via`, `cache.hit`, and required `quick_view` fields.
+
+### Smoke: health JSON contract
+1. Start the service:
+```
+npm run service
+```
+2. In another shell:
+```
+npm run smoke:health
+```
+The health check asserts `ok`, `status`, `service_version`, `time_utc` (ISO UTC), and `uptime_sec`.
+
+### Deterministic local workflow
+Terminal A:
+```
+npm run service
+```
+Terminal B:
+```
+npm run smoke:health && npm run smoke:service
+```
+
+## Troubleshooting
+- **Service offline**: Ensure `npm run service` is running. Check the popup for `Service: offline` and the OFF badge.
+- **Wrong URL**: Open “Service settings” in the popup and confirm the Service URL is correct and reachable.
+- **Smokes failing**: Start the service in Terminal A and rerun the smoke commands in Terminal B.
 
 ### Manual: extension flow checklist (content → background → service → chrome.storage)
 Use these 5 gold slugs (one includes `/`):

@@ -3,7 +3,7 @@
   "name": "Polymarket Analyzer (Stage 1)",
   "version": "0.1.0",
   "description": "Minimal MV3 bridge to local analyzer service.",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "storage", "alarms"],
   "host_permissions": ["http://127.0.0.1:8787/*"],
   "action": {
     "default_title": "Analyze market",

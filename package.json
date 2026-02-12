@@ -7,7 +7,9 @@
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
     "service": "tsx src/service.ts",
-    "smoke:service": "node scripts/smoke_service.mjs"
+    "smoke:service": "node scripts/smoke_service.mjs",
+    "smoke:health": "node scripts/smoke_health.mjs",
+    "test:popup-state": "node scripts/test_popup_state.mjs"
   },
   "devDependencies": {
     "dotenv": "^16.4.0",

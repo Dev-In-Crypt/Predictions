@@ -11,9 +11,17 @@
       <header>
         <div class="title">Polymarket Analyzer</div>
         <div id="meta" class="meta-line">—</div>
+        <div id="service" class="meta-line muted">Service: —</div>
+        <div id="serviceHint" class="hint hidden">Run: npm run service</div>
+        <div class="meta-line">Service version: <span id="serviceVersion">—</span></div>
+        <div class="meta-line">Extension version: <span id="extensionVersion">—</span></div>
       </header>
 
       <section id="success" class="block hidden">
+        <div class="row">
+          <div class="label">Request ID</div>
+          <div id="requestId" class="value">—</div>
+        </div>
         <div class="row">
           <div class="label">Estimate YES %</div>
           <div id="estimate" class="value">—</div>
@@ -50,6 +58,10 @@
 
       <section id="error" class="block error hidden">
         <div class="row">
+          <div class="label">Request ID</div>
+          <div id="errorRequestId" class="value">—</div>
+        </div>
+        <div class="row">
           <div class="label">Step</div>
           <div id="errorStep" class="value">—</div>
         </div>
@@ -61,14 +73,37 @@
           <div class="label">Message</div>
           <div id="errorMessage" class="value multiline">—</div>
         </div>
+        <div class="row">
+          <div class="label">Hint</div>
+          <div id="errorHint" class="value multiline">—</div>
+        </div>
       </section>
 
+      <details class="settings">
+        <summary>Service settings</summary>
+        <div class="settings-body">
+          <label class="input-label" for="serviceUrl">Service URL</label>
+          <input id="serviceUrl" class="input" type="text" spellcheck="false" />
+          <div class="settings-actions">
+            <button id="saveService" class="secondary">Save</button>
+            <button id="testHealth" class="secondary">Test health</button>
+          </div>
+          <div id="serviceStatus" class="settings-status muted">—</div>
+        </div>
+      </details>
+
       <div class="controls">
-        <button id="run" class="primary">Analyze current page</button>
+        <div class="controls-actions">
+          <button id="run" class="primary">Analyze current page</button>
+          <button id="cancel" class="secondary hidden">Cancel</button>
+          <button id="retry" class="secondary hidden">Retry</button>
+        </div>
+        <button id="copyDebug" class="secondary">Copy debug</button>
+        <button id="clearData" class="secondary">Clear data</button>
         <div id="status" class="status muted">Ready</div>
       </div>
     </div>
 
-    <script src="popup.js"></script>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>

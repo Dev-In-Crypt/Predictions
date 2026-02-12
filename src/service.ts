@@ -1,8 +1,9 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import http from "node:http";
 import { analyzeMarket } from "./analyzer.js";
 
 const SCHEMA_VERSION = "1.0";
+const SERVICE_VERSION = "1.0.0";
 
 function buildServiceError(message: string, errorCode = "BAD_REQUEST") {
   const timestamp = new Date().toISOString();
@@ -21,6 +22,7 @@ function buildServiceError(message: string, errorCode = "BAD_REQUEST") {
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.ANALYZER_PORT ?? "8787", 10);
+const startedAt = Date.now();
 
 const server = http.createServer(async (req, res) => {
   if (!req.url) {
@@ -29,10 +31,32 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  const requestId = `req_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
+  if (url.pathname === "/health") {
+    // /health contract (stable):
+    // {
+    //   ok: true,
+    //   status: "ok",
+    //   service_version: "1.0.0",
+    //   time_utc: ISO-8601 UTC string,
+    //   uptime_sec: integer seconds since process start
+    // }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        status: "ok",
+        service_version: SERVICE_VERSION,
+        time_utc: new Date().toISOString(),
+        uptime_sec: Math.floor((Date.now() - startedAt) / 1000),
+      })
+    );
+    return;
+  }
   if (url.pathname !== "/analyze") {
     res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(buildServiceError("Not found.", "NOT_FOUND")));
+    res.end(JSON.stringify({ ...buildServiceError("Not found.", "NOT_FOUND"), request_id: requestId }));
     return;
   }
 
@@ -43,13 +67,17 @@ const server = http.createServer(async (req, res) => {
 
   if (!slug) {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(buildServiceError("Missing slug.")));
+    res.end(JSON.stringify({ ...buildServiceError("Missing slug."), request_id: requestId }));
     return;
   }
 
   const result = await analyzeMarket({ eventSlug: slug, marketIndex });
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(result.status === "success" ? result.payload : result.error));
+  if (result.status === "success") {
+    res.end(JSON.stringify({ ...result.payload, request_id: requestId }));
+  } else {
+    res.end(JSON.stringify({ ...result.error, request_id: requestId }));
+  }
 });
 
 server.listen(PORT, HOST, () => {

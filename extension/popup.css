@@ -44,6 +44,12 @@ header {
   color: var(--muted);
 }
 
+.hint {
+  font-size: 12px;
+  color: var(--error);
+  font-weight: 600;
+}
+
 .block {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -91,6 +97,86 @@ header {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.controls-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.controls-actions .primary {
+  flex: 2;
+}
+
+.controls-actions .secondary {
+  flex: 1;
+}
+
+.settings {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.settings summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.settings-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.input-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.secondary {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: #f8f6f2;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.settings-status {
+  font-size: 12px;
 }
 
 .primary {
