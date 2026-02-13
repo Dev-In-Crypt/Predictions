@@ -9,6 +9,7 @@
     "service": "tsx src/service.ts",
     "smoke:service": "node scripts/smoke_service.mjs",
     "smoke:health": "node scripts/smoke_health.mjs",
+    "smoke:history": "node scripts/smoke_history.mjs",
     "test:popup-state": "node scripts/test_popup_state.mjs"
   },
   "devDependencies": {

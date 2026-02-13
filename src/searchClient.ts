@@ -1,16 +1,22 @@
-export interface SearchResult {
+﻿export type SourceTier = "tier1" | "tier2" | "unknown";
+
+export interface ExternalSource {
+  source_id: string;
   url: string;
+  canonical_url: string;
   title: string;
   snippet: string;
+  published_at?: string;
   domain: string;
-  publishedDate?: string;
-  tier: "tier1" | "tier2" | "tier3" | "unknown";
-  score: number;
+  tier: SourceTier;
+  relevance_score: number;
+  recency_score: number;
+  combined_score: number;
 }
 
 export interface SearchBundle {
   queries: string[];
-  results: SearchResult[];
+  results: ExternalSource[];
 }
 
 const TIER1_DOMAINS = [
@@ -36,87 +42,95 @@ const TIER2_DOMAINS = [
   "latimes.com",
 ];
 
-function domainFromUrl(url: string): string {
+function hash(value: string): string {
+  let h = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    h = (h * 33) ^ value.charCodeAt(i);
+  }
+  return (h >>> 0).toString(16);
+}
+
+export function canonicalizeUrl(value: string): string {
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    const parsed = new URL(value.trim());
+    parsed.hash = "";
+    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "ref"].forEach((k) => {
+      parsed.searchParams.delete(k);
+    });
+    const query = parsed.searchParams.toString();
+    const path = parsed.pathname.replace(/\/+$/g, "") || "/";
+    return `${parsed.protocol}//${parsed.hostname.toLowerCase()}${path}${query ? `?${query}` : ""}`;
+  } catch {
+    return value.trim().toLowerCase().replace(/\/+$/g, "");
+  }
+}
+
+export function domainFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return "";
   }
 }
 
-function classifyTier(domain: string): SearchResult["tier"] {
+function classifyTier(domain: string): SourceTier {
   if (!domain) return "unknown";
+  if (domain.endsWith(".gov") || domain.endsWith(".edu") || domain.endsWith(".int")) return "tier1";
   if (TIER1_DOMAINS.some((d) => domain.endsWith(d))) return "tier1";
   if (TIER2_DOMAINS.some((d) => domain.endsWith(d))) return "tier2";
-  if (domain.endsWith(".gov") || domain.endsWith(".edu") || domain.endsWith(".int")) return "tier1";
-  return "tier3";
+  return "unknown";
 }
 
-function recencyScore(publishedDate?: string): number {
-  if (!publishedDate) return 0;
-  const ts = Date.parse(publishedDate);
-  if (Number.isNaN(ts)) return 0;
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3);
+}
+
+function parsePublishedAt(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const ts = Date.parse(raw);
+  if (!Number.isFinite(ts)) return undefined;
+  return new Date(ts).toISOString();
+}
+
+function recencyScore(publishedAt?: string): number {
+  if (!publishedAt) return 0;
+  const ts = Date.parse(publishedAt);
+  if (!Number.isFinite(ts)) return 0;
   const days = (Date.now() - ts) / (1000 * 60 * 60 * 24);
-  if (days < 7) return 3;
-  if (days < 30) return 2;
-  if (days < 180) return 1;
-  return 0;
+  if (days <= 7) return 4;
+  if (days <= 30) return 3;
+  if (days <= 180) return 2;
+  return 1;
 }
 
-function tierScore(tier: SearchResult["tier"]): number {
-  if (tier === "tier1") return 3;
-  if (tier === "tier2") return 2;
-  if (tier === "tier3") return 1;
-  return 0;
-}
-
-export function generateQueries(params: {
-  title: string;
-  description?: string;
-  resolutionCriteria?: string;
-}): string[] {
-  const title = params.title.trim();
-  const base = title.replace(/\s+/g, " ");
-  const queries = new Set<string>();
-  queries.add(base);
-  queries.add(`${base} resolution`);
-  queries.add(`${base} official announcement`);
-  if (params.resolutionCriteria) {
-    const rc = params.resolutionCriteria.split(".")[0]?.trim();
-    if (rc) queries.add(`${base} ${rc}`);
+function relevanceScore(title: string, snippet: string, query: string): number {
+  const hay = `${title} ${snippet}`.toLowerCase();
+  const tokens = Array.from(new Set(tokenize(query)));
+  if (tokens.length === 0) return 0;
+  let matched = 0;
+  for (const token of tokens) {
+    if (hay.includes(token)) matched += 1;
   }
-  if (params.description) {
-    const words = params.description
-      .split(/\s+/)
-      .filter((w) => /^[A-Z][A-Za-z\-]+$/.test(w))
-      .slice(0, 3);
-    if (words.length > 0) queries.add(`${base} ${words.join(" ")}`);
-  }
-  return Array.from(queries).slice(0, 7);
+  return matched;
 }
 
-export async function searchBrave(
-  apiKey: string,
-  queries: string[],
-  opts: { timeoutMs: number },
-): Promise<SearchBundle> {
-  const results: SearchResult[] = [];
-  for (const query of queries) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), opts.timeoutMs);
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=20`;
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        headers: {
-          "Accept": "application/json",
-          "X-Subscription-Token": apiKey,
-        },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+async function fetchBrave(apiKey: string, query: string, timeoutMs: number, count: number): Promise<Array<{ url?: string; title?: string; description?: string; published?: string; page_age?: string }>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "X-Subscription-Token": apiKey,
+      },
+      signal: controller.signal,
+    });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Brave search error (${res.status}): ${text}`);
@@ -124,39 +138,126 @@ export async function searchBrave(
     const data = (await res.json()) as {
       web?: { results?: Array<{ url?: string; title?: string; description?: string; published?: string; page_age?: string }> };
     };
-    const items = data.web?.results ?? [];
+    return data.web?.results ?? [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function buildSourceId(canonicalUrl: string): string {
+  return `ext:${hash(canonicalUrl)}`;
+}
+
+export function generateQueries(params: {
+  title: string;
+  description?: string;
+  resolutionCriteria?: string;
+}): string[] {
+  const base = params.title.trim().replace(/\s+/g, " ");
+  if (!base) return [];
+  const queries = new Set<string>();
+  queries.add(base);
+  if (params.description) {
+    const entityWords = params.description
+      .split(/\s+/)
+      .filter((w) => /^[A-Z][A-Za-z\-]+$/.test(w))
+      .slice(0, 3);
+    if (entityWords.length > 0) queries.add(`${base} ${entityWords.join(" ")}`);
+  }
+  if (params.resolutionCriteria) {
+    const criteria = params.resolutionCriteria.split(/[.;]/)[0]?.trim();
+    if (criteria) queries.add(`${base} ${criteria}`);
+  }
+  queries.add(`${base} latest`);
+  return Array.from(queries).slice(0, 4);
+}
+
+async function withRetries<T>(fn: () => Promise<T>, retries: number, backoffMs: number): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= retries) break;
+      const delay = backoffMs * Math.pow(2, attempt);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw (lastErr instanceof Error ? lastErr : new Error("Search failed"));
+}
+
+export async function searchBrave(
+  apiKey: string,
+  queries: string[],
+  opts: {
+    timeoutMs: number;
+    retries: number;
+    backoffMs: number;
+    perQueryCount: number;
+    topN: number;
+    maxPerDomain: number;
+  },
+): Promise<SearchBundle> {
+  const rows: Array<{ query: string; url: string; title: string; snippet: string; published_at?: string; domain: string; tier: SourceTier; relevance: number; recency: number; combined: number }> = [];
+
+  for (const query of queries) {
+    const items = await withRetries(
+      () => fetchBrave(apiKey, query, opts.timeoutMs, opts.perQueryCount),
+      Math.max(0, opts.retries),
+      Math.max(0, opts.backoffMs),
+    );
+
     for (const item of items) {
-      const url = item.url ?? "";
+      const url = (item.url ?? "").trim();
       if (!url) continue;
-      const domain = domainFromUrl(url);
+      const canonical = canonicalizeUrl(url);
+      const title = (item.title ?? "").trim();
+      const snippet = (item.description ?? "").trim();
+      const domain = domainFromUrl(canonical);
       const tier = classifyTier(domain);
-      const publishedDate = item.published ?? item.page_age ?? undefined;
-      const score = tierScore(tier) + recencyScore(publishedDate);
-      results.push({
-        url,
-        title: item.title ?? "",
-        snippet: item.description ?? "",
-        domain,
-        publishedDate,
-        tier,
-        score,
-      });
+      const published_at = parsePublishedAt(item.published ?? item.page_age);
+      const relevance = relevanceScore(title, snippet, query);
+      const recency = recencyScore(published_at);
+      const combined = relevance * 3 + recency;
+      rows.push({ query, url: canonical, title, snippet, published_at, domain, tier, relevance, recency, combined });
     }
   }
 
-  // Deduplicate by URL and domain, then keep top 8–12.
-  const byUrl = new Map<string, SearchResult>();
-  for (const r of results) {
-    if (!byUrl.has(r.url)) byUrl.set(r.url, r);
+  rows.sort((a, b) => b.combined - a.combined);
+
+  const byCanonical = new Map<string, typeof rows[number]>();
+  for (const row of rows) {
+    const existing = byCanonical.get(row.url);
+    if (!existing || row.combined > existing.combined) {
+      byCanonical.set(row.url, row);
+    }
   }
-  const deduped = Array.from(byUrl.values());
-  const byDomain = new Map<string, SearchResult>();
-  for (const r of deduped.sort((a, b) => b.score - a.score)) {
-    if (!byDomain.has(r.domain)) byDomain.set(r.domain, r);
+
+  const byDomainCount = new Map<string, number>();
+  const selected: ExternalSource[] = [];
+  for (const row of Array.from(byCanonical.values())) {
+    if (selected.length >= opts.topN) break;
+    const domainCount = byDomainCount.get(row.domain) ?? 0;
+    if (domainCount >= opts.maxPerDomain) continue;
+    byDomainCount.set(row.domain, domainCount + 1);
+    selected.push({
+      source_id: buildSourceId(row.url),
+      url: row.url,
+      canonical_url: row.url,
+      title: row.title,
+      snippet: row.snippet,
+      published_at: row.published_at,
+      domain: row.domain,
+      tier: row.tier,
+      relevance_score: row.relevance,
+      recency_score: row.recency,
+      combined_score: row.combined,
+    });
   }
-  const ranked = Array.from(byDomain.values()).sort((a, b) => b.score - a.score);
+
   return {
     queries,
-    results: ranked.slice(0, 12),
+    results: selected,
   };
 }

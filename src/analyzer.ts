@@ -1,12 +1,14 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+﻿import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fetchMarketData } from "./marketFetcher.js";
 import { requestPrediction } from "./aiClient.js";
 import { DEFAULT_PROMPT } from "./prompt.js";
+import { generateQueries, searchBrave, type ExternalSource } from "./searchClient.js";
 import { formatPercent, readEnv, safeJsonParse } from "./utils.js";
 
 const SCHEMA_VERSION = "1.0";
 const DEFAULT_CACHE_TTL_SEC = 1800;
+const CACHE_PIPELINE_VERSION = "stage6_0";
 
 export type ErrorStep = "market_fetch" | "search" | "llm" | "parse" | "validate" | "cache" | "overall";
 
@@ -114,20 +116,22 @@ function buildPrompt(template: string, params: Record<string, string>): string {
 type SourceItem = {
   source_id?: string;
   url?: string;
+  canonical_url?: string;
   title?: string;
   snippet?: string;
   description?: string;
   resolution_criteria?: string;
   domain?: string;
+  published_at?: string;
   published_date?: string;
-  tier?: "tier1" | "tier2" | "tier3" | "unknown";
+  tier?: "tier1" | "tier2" | "unknown";
   captured_at_utc?: string;
   retrieved_at_utc?: string;
   type?: string;
   label?: string;
 };
 
-const ALLOWED_TIERS = new Set(["tier1", "tier2", "tier3", "unknown"]);
+const ALLOWED_TIERS = new Set(["tier1", "tier2", "unknown"]);
 const TIER1_DOMAINS = [
   "reuters.com",
   "apnews.com",
@@ -160,7 +164,7 @@ function inferTier(domain: string): SourceItem["tier"] {
   if (TIER1_DOMAINS.some((d) => domain.endsWith(d))) return "tier1";
   if (TIER2_DOMAINS.some((d) => domain.endsWith(d))) return "tier2";
   if (domain.endsWith(".gov") || domain.endsWith(".edu") || domain.endsWith(".int")) return "tier1";
-  return "tier3";
+  return "unknown";
 }
 
 function normalizeInputSources(input: unknown): { sources: SourceItem[]; malformed: boolean } {
@@ -335,9 +339,7 @@ function evidenceQuality(sources: SourceItem[]): {
     ? "tier1"
     : tiers.includes("tier2")
       ? "tier2"
-      : tiers.includes("tier3")
-        ? "tier3"
-        : "unknown";
+      : "unknown";
   const recencySummary = sources.some((s) => s.published_date) ? "mixed" : "unknown";
   return { sourceCount: sources.length, bestTier, recencySummary, conflictsDetected: [] };
 }
@@ -429,6 +431,54 @@ function normalizeUrl(value: string): string {
   return value.trim().replace(/\/+$/g, "").toLowerCase();
 }
 
+function isEnabled(name: string, fallback = "0"): boolean {
+  const raw = (process.env[name] ?? fallback).trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "on";
+}
+
+function searchEnabled(): boolean {
+  return isEnabled("SEARCH_ENABLED", "0");
+}
+
+function fromExternalSource(source: ExternalSource): SourceItem {
+  return {
+    source_id: source.source_id,
+    url: source.url,
+    canonical_url: source.canonical_url,
+    title: source.title,
+    snippet: source.snippet,
+    domain: source.domain,
+    published_at: source.published_at,
+    published_date: source.published_at,
+    tier: source.tier,
+    retrieved_at_utc: new Date().toISOString(),
+    type: "search",
+    label: "External search",
+  };
+}
+
+function mergeSourceLists(inputSources: SourceItem[], externalSources: SourceItem[]): SourceItem[] {
+  if (externalSources.length === 0) return inputSources;
+  const merged = new Map<string, SourceItem>();
+  const all = [...inputSources, ...externalSources];
+  for (const source of all) {
+    const key = normalizeUrl(source.canonical_url ?? source.url ?? "");
+    if (!key) continue;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, source);
+      continue;
+    }
+    const existingTier = existing.tier ?? "unknown";
+    const currentTier = source.tier ?? "unknown";
+    const rank = (tier: string): number => (tier === "tier1" ? 2 : tier === "tier2" ? 1 : 0);
+    if (rank(currentTier) > rank(existingTier)) {
+      merged.set(key, source);
+    }
+  }
+  return Array.from(merged.values());
+}
+
 function enforceKeyFactSupport(
   payload: Record<string, unknown>,
   sources: SourceItem[],
@@ -501,7 +551,7 @@ function applyTieringSignals(payload: Record<string, unknown>, sources: SourceIt
     sources.length > 0 &&
     sources.every((s) => {
       const tier = s.tier ?? "unknown";
-      return tier === "tier3" || tier === "unknown";
+      return tier === "unknown";
     });
 
   if (sourcesMissing && confidence) {
@@ -556,7 +606,7 @@ function normalizeSlugKey(input: string): string {
 function buildCacheKey(input: AnalysisInput): string {
   const baseRaw = input.slug ?? input.eventSlug ?? (input.id ? `id:${input.id}` : "");
   const base = normalizeSlugKey(baseRaw || "unknown");
-  const parts = [base];
+  const parts = [base, `pipeline=${CACHE_PIPELINE_VERSION}`, `search=${searchEnabled() ? "on" : "off"}`];
   if (typeof input.marketIndex === "number" && Number.isFinite(input.marketIndex)) {
     parts.push(`market_index=${input.marketIndex}`);
   }
@@ -696,6 +746,14 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
   const marketTimeoutMs = Number.parseInt(process.env.MARKET_TIMEOUT_MS ?? "15000", 10);
   const minIntervalMs = Number.parseInt(process.env.RATE_LIMIT_MS ?? "0", 10);
   const gammaDelayMs = Number.parseInt(process.env.GAMMA_REQUEST_DELAY_MS ?? "120", 10);
+  const searchRequestTimeoutMs = Number.parseInt(process.env.SEARCH_TIMEOUT_MS ?? "5000", 10);
+  const searchTotalTimeoutMs = Number.parseInt(process.env.SEARCH_TOTAL_TIMEOUT_MS ?? "12000", 10);
+  const searchRetries = Number.parseInt(process.env.SEARCH_RETRIES ?? "1", 10);
+  const searchBackoffMs = Number.parseInt(process.env.SEARCH_BACKOFF_MS ?? "400", 10);
+  const searchRateLimitMs = Number.parseInt(process.env.SEARCH_RATE_LIMIT_MS ?? "0", 10);
+  const searchPerQueryCount = Number.parseInt(process.env.SEARCH_PER_QUERY_COUNT ?? "10", 10);
+  const searchTopN = Number.parseInt(process.env.SEARCH_TOP_N ?? "12", 10);
+  const searchMaxPerDomain = Number.parseInt(process.env.SEARCH_MAX_PER_DOMAIN ?? "2", 10);
 
   const rateLimitError = await rateLimitCheck(minIntervalMs, "overall");
   if (rateLimitError) {
@@ -828,7 +886,37 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
         const outcomeSummary = formatOutcomeSummary(market.outcomes, market.outcomePrices);
         const promptTemplate = await loadPromptTemplate();
 
-        const { sources, malformed: sourcesMalformed } = normalizeInputSources(input.sources);
+        const { sources: inputSources, malformed: sourcesMalformed } = normalizeInputSources(input.sources);
+        let sources = inputSources;
+
+        if (searchEnabled()) {
+          try {
+            const searchApiKey = readEnv("SEARCH_API_KEY", true) as string;
+            const searchRateLimited = await rateLimitCheck(searchRateLimitMs, "search");
+            if (!searchRateLimited) {
+              const queries = generateQueries({
+                title: market.question ?? market.slug ?? market.id,
+                description: market.description,
+                resolutionCriteria: market.resolutionCriteria,
+              });
+              if (queries.length > 0) {
+                const searchPromise = searchBrave(searchApiKey, queries, {
+                  timeoutMs: searchRequestTimeoutMs,
+                  retries: searchRetries,
+                  backoffMs: searchBackoffMs,
+                  perQueryCount: searchPerQueryCount,
+                  topN: searchTopN,
+                  maxPerDomain: searchMaxPerDomain,
+                });
+                const bundle = await runWithTimeout(searchPromise, searchTotalTimeoutMs);
+                const normalizedExternal = bundle.results.map(fromExternalSource);
+                sources = mergeSourceLists(inputSources, normalizedExternal);
+              }
+            }
+          } catch (err) {
+            debugLog(`search: skipped (${err instanceof Error ? err.message : "error"})`);
+          }
+        }
 
         debugLog(`sources: ${summarizeSources(sources)}`);
 
@@ -842,7 +930,7 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
                     `title: ${s.title}\n` +
                     `snippet: ${s.snippet}\n` +
                     `url: ${s.url}\n` +
-                    `published_date: ${s.published_date ?? "unknown"}\n` +
+                    `published_date: ${s.published_date ?? s.published_at ?? "unknown"}\n` +
                     `domain: ${s.domain ?? "unknown"}\n` +
                     `tier: ${s.tier ?? "unknown"}`,
                 )

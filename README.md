@@ -13,7 +13,7 @@ npm run service
 ```
 Terminal B:
 ```
-npm run smoke:health && npm run smoke:service
+npm run smoke:health && npm run smoke:service && npm run smoke:history
 ```
 
 ## Run
@@ -79,6 +79,19 @@ npm run smoke:health
 ```
 The health check asserts `ok`, `status`, `service_version`, `time_utc` (ISO UTC), and `uptime_sec`.
 
+### Smoke: history HTML contract
+1. Start the service:
+```
+npm run service
+```
+2. In another shell:
+```
+npm run smoke:history
+```
+The history smoke asserts `GET /history` returns HTML with status 200 for both:
+- an empty history payload
+- a populated history payload
+
 ### Deterministic local workflow
 Terminal A:
 ```
@@ -86,8 +99,21 @@ npm run service
 ```
 Terminal B:
 ```
-npm run smoke:health && npm run smoke:service
+npm run smoke:health && npm run smoke:service && npm run smoke:history
 ```
+
+## Stage 7 behavior
+- Extension stores a compact bounded history (`N=20`) in `chrome.storage.local` under `analysis_history`.
+- History is upserted by slug (re-analysis updates existing row and moves it to newest position).
+- Popup shows last 3 entries and opens:
+  - full report for one entry (`/report?slug=...`)
+  - full history page (`/history#history=...`)
+- `/history` supports filters by slug search, confidence, and time range.
+- `/report` supports export actions:
+  - Copy JSON
+  - Copy short summary
+  - Download JSON
+- `Clear data` removes analysis and history data, but keeps `service_url`.
 
 ## Troubleshooting
 - **Service offline**: Ensure npm run service is running. Check the popup for Service: offline and the OFF badge.
@@ -152,5 +178,4 @@ node scripts/regenerate_metrics.mjs --outputs run_outputs_gold.json --gold data\
 ### Metrics outputs
 - `metrics_summary_gold.json` (overall + per-slug metrics)
 - `metrics_partial_gold.json` (per-slug metrics only)
-
 

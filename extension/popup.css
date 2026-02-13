@@ -258,3 +258,51 @@ header {
 .hidden {
   display: none;
 }
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.history-view-all {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.history-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.history-slug {
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.history-action {
+  width: auto;
+  flex: 0 0 auto;
+  justify-self: start;
+  padding: 6px 10px;
+  font-size: 11px;
+}

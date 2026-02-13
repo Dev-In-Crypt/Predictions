@@ -21,6 +21,8 @@ const confidenceEl = document.getElementById("confidence");
 const contextLineEl = document.getElementById("contextLine");
 const openFullReportButton = document.getElementById("openFullReport");
 const errorMessageEl = document.getElementById("errorMessage");
+const historyListEl = document.getElementById("historyList");
+const viewAllHistoryButton = document.getElementById("viewAllHistory");
 
 const serviceUrlInput = document.getElementById("serviceUrl");
 const saveServiceButton = document.getElementById("saveService");
@@ -50,6 +52,27 @@ function formatUpdated(timestamp) {
   } catch {
     return "—";
   }
+}
+
+function formatHistoryTime(timestampUtc) {
+  if (!timestampUtc || typeof timestampUtc !== "string") return "вЂ”";
+  try {
+    return new Date(timestampUtc).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "вЂ”";
+  }
+}
+
+function shortSlug(slug) {
+  if (typeof slug !== "string") return "вЂ”";
+  const clean = slug.trim();
+  if (!clean) return "вЂ”";
+  return clean.length > 30 ? `${clean.slice(0, 27)}...` : clean;
 }
 
 function isAllowedServiceUrl(value) {
@@ -157,6 +180,45 @@ function renderAnalysis(data) {
   }
 }
 
+function renderHistory(history) {
+  const items = Array.isArray(history) ? history.slice(0, 3) : [];
+  historyListEl.textContent = "";
+
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "history-meta";
+    empty.textContent = "No history yet.";
+    historyListEl.appendChild(empty);
+    return;
+  }
+
+  for (const entry of items) {
+    const row = document.createElement("div");
+    row.className = "history-item";
+
+    const slug = document.createElement("div");
+    slug.className = "history-slug";
+    slug.textContent = shortSlug(entry?.slug);
+
+    const meta = document.createElement("div");
+    meta.className = "history-meta";
+    const confidence = typeof entry?.confidence === "string" ? entry.confidence : "вЂ”";
+    meta.textContent = `${formatHistoryTime(entry?.timestamp_utc)} В· ${confidence}`;
+
+    const button = document.createElement("button");
+    button.className = "secondary history-action";
+    button.textContent = "Open full report";
+    button.dataset.reportUrl = typeof entry?.report_url === "string" ? entry.report_url : "";
+    button.dataset.slug = typeof entry?.slug === "string" ? entry.slug : "";
+    button.disabled = !button.dataset.reportUrl && !button.dataset.slug;
+
+    row.appendChild(slug);
+    row.appendChild(meta);
+    row.appendChild(button);
+    historyListEl.appendChild(row);
+  }
+}
+
 async function loadFromStorage() {
   const data = await chrome.storage.local.get([
     "last_analysis",
@@ -166,8 +228,10 @@ async function loadFromStorage() {
     "last_error_hint",
     "service_url",
     "last_service_version",
+    "analysis_history",
   ]);
   renderAnalysis(data);
+  renderHistory(data?.analysis_history);
   if (data?.last_analysis?.status === "error" && data?.last_error_message) {
     lastErrorLabel = data.last_error_message;
   }
@@ -289,6 +353,26 @@ async function openFullReport() {
   await chrome.tabs.create({ url });
 }
 
+async function openHistoryEntryReport(reportUrl, slug) {
+  if (typeof reportUrl === "string" && reportUrl.trim()) {
+    await chrome.tabs.create({ url: reportUrl.trim() });
+    return;
+  }
+  if (!slug) return;
+  const base = await getServiceBase();
+  await chrome.tabs.create({ url: `${base}/report?slug=${encodeURIComponent(slug)}` });
+}
+
+async function openFullHistory() {
+  const [base, data] = await Promise.all([
+    getServiceBase(),
+    chrome.storage.local.get(["analysis_history"]),
+  ]);
+  const history = Array.isArray(data?.analysis_history) ? data.analysis_history : [];
+  const hash = `#history=${encodeURIComponent(JSON.stringify(history))}`;
+  await chrome.tabs.create({ url: `${base}/history${hash}` });
+}
+
 async function runAnalysis() {
   if (uiState === UiStates.ANALYZING) {
     return;
@@ -342,6 +426,7 @@ async function copyDebug() {
     "last_updated",
     "service_url",
     "last_service_version",
+    "analysis_history",
   ]);
   const analysis = data?.last_analysis ?? {};
   const payload = {
@@ -356,6 +441,7 @@ async function copyDebug() {
     service_url: (data?.service_url || DEFAULT_SERVICE_BASE).replace(/\/$/, ""),
     extension_version: EXTENSION_VERSION,
     service_version: data?.last_service_version ?? null,
+    history_count: Array.isArray(data?.analysis_history) ? data.analysis_history.length : 0,
   };
   const text = JSON.stringify(payload, null, 2);
   await navigator.clipboard.writeText(text);
@@ -370,6 +456,7 @@ async function clearData() {
     "last_updated",
     "last_error_message",
     "last_error_hint",
+    "analysis_history",
   ]);
   lastErrorLabel = null;
   uiState = UiStates.IDLE;
@@ -415,6 +502,13 @@ testHealthButton.addEventListener("click", testHealth);
 copyDebugButton.addEventListener("click", copyDebug);
 clearDataButton.addEventListener("click", clearData);
 openFullReportButton.addEventListener("click", openFullReport);
+viewAllHistoryButton.addEventListener("click", openFullHistory);
+historyListEl.addEventListener("click", async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.classList.contains("history-action")) return;
+  await openHistoryEntryReport(target.dataset.reportUrl, target.dataset.slug);
+});
 
 async function syncAvailability() {
   uiState = transition(uiState, "CHECK_START");

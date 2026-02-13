@@ -3,6 +3,8 @@ const HEALTH_TIMEOUT_MS = 1200;
 const HEALTH_POLL_MINUTES = 1;
 const HEALTH_ALARM = "health_poll";
 const SCHEMA_VERSION = "1.0";
+const HISTORY_KEY = "analysis_history";
+const HISTORY_LIMIT = 20;
 const activeJobs = new Map();
 let healthFailureCount = 0;
 let healthOkEffective = true;
@@ -129,6 +131,69 @@ function compactResult(result) {
     return compactError(result);
   }
   return compactSuccess(result);
+}
+
+function clampPercent(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value * 1000) / 1000));
+}
+
+function toPercent(value) {
+  if (typeof value === "number") return clampPercent(value);
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return clampPercent(parsed);
+  }
+  return null;
+}
+
+function readEvidenceModeFlag(result) {
+  if (!result || typeof result !== "object") return undefined;
+  if (Object.prototype.hasOwnProperty.call(result, "evidence_mode")) {
+    return result.evidence_mode;
+  }
+  const quick = result.quick_view;
+  if (quick && typeof quick === "object" && Object.prototype.hasOwnProperty.call(quick, "evidence_mode")) {
+    return quick.evidence_mode;
+  }
+  return undefined;
+}
+
+function buildHistoryEntry({ slug, result, serviceBase }) {
+  const quick = result?.quick_view ?? {};
+  const yes = toPercent(quick?.estimate_yes_pct ?? quick?.estimate_yes);
+  const no = yes === null ? null : clampPercent(100 - yes);
+  const evidenceMode = readEvidenceModeFlag(result);
+  const entry = {
+    slug,
+    timestamp_utc: new Date().toISOString(),
+    yes_percent: yes,
+    no_percent: no,
+    confidence: typeof quick?.confidence === "string" ? quick.confidence : null,
+    request_id: result?.request_id ?? null,
+    cache_expires_at_utc:
+      typeof result?.cache?.expires_at_utc === "string" ? result.cache.expires_at_utc : null,
+    service_url: serviceBase,
+    report_url: `${serviceBase}/report?slug=${encodeURIComponent(slug)}`,
+  };
+  if (evidenceMode !== undefined) {
+    entry.evidence_mode = evidenceMode;
+  }
+  return entry;
+}
+
+async function upsertHistoryEntry(entry) {
+  const stored = await chrome.storage.local.get([HISTORY_KEY]);
+  const history = Array.isArray(stored?.[HISTORY_KEY]) ? stored[HISTORY_KEY] : [];
+  const next = [entry, ...history.filter((item) => item?.slug !== entry.slug)].slice(0, HISTORY_LIMIT);
+  await chrome.storage.local.set({ [HISTORY_KEY]: next });
+}
+
+async function recordHistorySuccess(slug, result) {
+  if (!slug || !result || result?.status === "error") return;
+  const serviceBase = await getServiceBase();
+  const entry = buildHistoryEntry({ slug, result, serviceBase });
+  await upsertHistoryEntry(entry);
 }
 
 function isValidHealthPayload(payload) {
@@ -346,12 +411,13 @@ async function runAnalysisForActiveTab() {
 
   cancelActiveJob(tab.id, "superseded");
 
-    const cached = await getCachedResult(slug);
-    if (cached) {
-      await notifyResult(slug, cached);
-      await evaluateBadge({ healthOk: getHealthEffective(), analysisStatus: cached?.status });
-      return { ok: true, resultStatus: cached?.status ?? "success", cached: true };
-    }
+  const cached = await getCachedResult(slug);
+  if (cached) {
+    await recordHistorySuccess(slug, cached);
+    await notifyResult(slug, cached);
+    await evaluateBadge({ healthOk: getHealthEffective(), analysisStatus: cached?.status });
+    return { ok: true, resultStatus: cached?.status ?? "success", cached: true };
+  }
 
   const controller = new AbortController();
   const jobId = `${tab.id}-${Date.now()}`;
@@ -404,6 +470,7 @@ async function runAnalysisForActiveTab() {
       last_error_message: null,
       last_error_hint: null,
     });
+    await recordHistorySuccess(slug, compact);
 
     if (compact?.status === "error") {
       await chrome.storage.local.set({

@@ -104,6 +104,26 @@ function renderReportPage(slug: string): string {
         color: #b3261e;
         font-weight: 600;
       }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .btn {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f8f6f2;
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 600;
+        padding: 8px 10px;
+        cursor: pointer;
+      }
+      .export-status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
       .hidden { display: none; }
     </style>
   </head>
@@ -112,6 +132,16 @@ function renderReportPage(slug: string): string {
       <div class="card">
         <h1>Polymarket Full Report</h1>
         <div class="muted">Slug: <code id="slug">${safeSlug}</code></div>
+      </div>
+
+      <div class="card">
+        <h2>Export</h2>
+        <div class="actions">
+          <button id="copyJson" class="btn">Copy JSON</button>
+          <button id="copySummary" class="btn">Copy short summary</button>
+          <button id="downloadJson" class="btn">Download JSON</button>
+        </div>
+        <div id="exportStatus" class="export-status">Ready</div>
       </div>
 
       <div id="error" class="card error hidden"></div>
@@ -146,6 +176,7 @@ function renderReportPage(slug: string): string {
 
     <script>
       const slug = ${JSON.stringify(slug)};
+      let currentPayload = null;
 
       function asArray(value) {
         return Array.isArray(value) ? value : [];
@@ -188,6 +219,7 @@ function renderReportPage(slug: string): string {
       }
 
       function render(payload) {
+        currentPayload = payload;
         const quick = payload?.quick_view ?? {};
         const full = payload?.full_report ?? {};
         const sources = asArray(payload?.sources);
@@ -299,6 +331,71 @@ function renderReportPage(slug: string): string {
         }
       }
 
+      function shortSummary(payload) {
+        const quick = payload?.quick_view ?? {};
+        const yes = text(quick?.estimate_yes_pct);
+        const no = quick?.estimate_yes_pct === null || quick?.estimate_yes_pct === undefined
+          ? "—"
+          : text(100 - Number(quick?.estimate_yes_pct));
+        const confidence = text(quick?.confidence);
+        const context = text(quick?.one_sentence_take ?? quick?.summary);
+        const requestId = text(payload?.request_id);
+        return [
+          "Market: " + text(slug),
+          "YES: " + yes + " | NO: " + no + " | Confidence: " + confidence,
+          "Context: " + context,
+          "Request ID: " + requestId,
+          "Timestamp UTC: " + text(payload?.timestamp_utc),
+        ].join("\\n");
+      }
+
+      async function copyText(value, okMessage) {
+        const statusEl = document.getElementById("exportStatus");
+        try {
+          await navigator.clipboard.writeText(value);
+          statusEl.textContent = okMessage;
+        } catch (err) {
+          statusEl.textContent = "Copy failed: " + (err?.message || String(err));
+        }
+      }
+
+      function downloadPayload(payload) {
+        const statusEl = document.getElementById("exportStatus");
+        try {
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = (slug || "report") + ".json";
+          a.click();
+          URL.revokeObjectURL(url);
+          statusEl.textContent = "Downloaded JSON";
+        } catch (err) {
+          statusEl.textContent = "Download failed: " + (err?.message || String(err));
+        }
+      }
+
+      function wireExportActions() {
+        const copyJsonBtn = document.getElementById("copyJson");
+        const copySummaryBtn = document.getElementById("copySummary");
+        const downloadJsonBtn = document.getElementById("downloadJson");
+
+        copyJsonBtn.addEventListener("click", async () => {
+          if (!currentPayload) return;
+          await copyText(JSON.stringify(currentPayload, null, 2), "Copied JSON");
+        });
+
+        copySummaryBtn.addEventListener("click", async () => {
+          if (!currentPayload) return;
+          await copyText(shortSummary(currentPayload), "Copied short summary");
+        });
+
+        downloadJsonBtn.addEventListener("click", () => {
+          if (!currentPayload) return;
+          downloadPayload(currentPayload);
+        });
+      }
+
       function parsePayloadFromHash() {
         if (!location.hash) return null;
         const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
@@ -341,7 +438,287 @@ function renderReportPage(slug: string): string {
         }
       }
 
+      wireExportActions();
       run();
+    </script>
+  </body>
+</html>`;
+}
+
+function parseHistoryParam(raw: string | null): Array<Record<string, unknown>> {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderHistoryPage(initialHistory: Array<Record<string, unknown>>): string {
+  const safeInitialHistory = JSON.stringify(initialHistory);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polymarket Analysis History</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f4f0;
+        --panel: #ffffff;
+        --ink: #201d18;
+        --muted: #6c655a;
+        --line: #e2ddd4;
+        --accent: #0f6d5e;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+      .wrap {
+        max-width: 1040px;
+        margin: 24px auto;
+        padding: 0 16px 24px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      .muted { color: var(--muted); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        padding: 8px 6px;
+        vertical-align: top;
+      }
+      th {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      a { color: var(--accent); }
+      code { background: #f1eee8; border-radius: 6px; padding: 2px 6px; }
+      .empty { color: var(--muted); }
+      .filters {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .filters input, .filters select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Polymarket Analysis History</h1>
+        <div class="muted">Loaded from extension history payload.</div>
+      </div>
+      <div class="card">
+        <div class="filters">
+          <input id="slugFilter" type="text" placeholder="Filter by slug" />
+          <select id="confidenceFilter">
+            <option value="all">All confidence</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <select id="timeFilter">
+            <option value="all">All time</option>
+            <option value="24h">Last 24h</option>
+            <option value="7d">Last 7d</option>
+            <option value="30d">Last 30d</option>
+          </select>
+        </div>
+        <div id="empty" class="empty">No history items.</div>
+        <table id="table" hidden>
+          <thead>
+            <tr>
+              <th>Slug</th>
+              <th>Timestamp (UTC)</th>
+              <th>YES %</th>
+              <th>NO %</th>
+              <th>Confidence</th>
+              <th>Request ID</th>
+              <th>Cache Expires</th>
+              <th>Service URL</th>
+              <th>Evidence Mode</th>
+              <th>Report</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+      const initialHistory = ${safeInitialHistory};
+
+      function text(v) {
+        if (v === null || v === undefined) return "—";
+        const s = String(v).trim();
+        return s ? s : "—";
+      }
+
+      function parseHistoryFromHash() {
+        if (!location.hash) return [];
+        const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+        const params = new URLSearchParams(raw);
+        const encoded = params.get("history");
+        if (!encoded) return [];
+        try {
+          const parsed = JSON.parse(encoded);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function parseTimeRangeMs(value) {
+        if (value === "24h") return 24 * 60 * 60 * 1000;
+        if (value === "7d") return 7 * 24 * 60 * 60 * 1000;
+        if (value === "30d") return 30 * 24 * 60 * 60 * 1000;
+        return null;
+      }
+
+      function applyFilters(history) {
+        const slugNeedle = String(document.getElementById("slugFilter").value || "").trim().toLowerCase();
+        const confidence = document.getElementById("confidenceFilter").value;
+        const timeRange = document.getElementById("timeFilter").value;
+        const windowMs = parseTimeRangeMs(timeRange);
+        const now = Date.now();
+
+        return history.filter((item) => {
+          const slug = String(item?.slug || "").toLowerCase();
+          if (slugNeedle && !slug.includes(slugNeedle)) return false;
+
+          const conf = String(item?.confidence || "").toLowerCase();
+          if (confidence !== "all" && conf !== confidence) return false;
+
+          if (windowMs !== null) {
+            const ts = Date.parse(String(item?.timestamp_utc || ""));
+            if (Number.isNaN(ts)) return false;
+            if (now - ts > windowMs) return false;
+          }
+
+          return true;
+        });
+      }
+
+      function resolveHistory() {
+        const fromHash = parseHistoryFromHash();
+        if (fromHash.length > 0) return fromHash.slice(0, 20);
+        return Array.isArray(initialHistory) ? initialHistory.slice(0, 20) : [];
+      }
+
+      function renderRows(history) {
+        const emptyEl = document.getElementById("empty");
+        const tableEl = document.getElementById("table");
+        const tbody = document.getElementById("tbody");
+        tbody.textContent = "";
+
+        if (history.length === 0) {
+          emptyEl.textContent = "No history items.";
+          tableEl.hidden = true;
+          return;
+        }
+
+        emptyEl.hidden = true;
+        tableEl.hidden = false;
+
+        for (const item of history) {
+          const tr = document.createElement("tr");
+
+          const slug = document.createElement("td");
+          const slugCode = document.createElement("code");
+          slugCode.textContent = text(item?.slug);
+          slug.appendChild(slugCode);
+          tr.appendChild(slug);
+
+          const ts = document.createElement("td");
+          ts.textContent = text(item?.timestamp_utc);
+          tr.appendChild(ts);
+
+          const yes = document.createElement("td");
+          yes.textContent = text(item?.yes_percent);
+          tr.appendChild(yes);
+
+          const no = document.createElement("td");
+          no.textContent = text(item?.no_percent);
+          tr.appendChild(no);
+
+          const conf = document.createElement("td");
+          conf.textContent = text(item?.confidence);
+          tr.appendChild(conf);
+
+          const req = document.createElement("td");
+          req.textContent = text(item?.request_id);
+          tr.appendChild(req);
+
+          const cache = document.createElement("td");
+          cache.textContent = text(item?.cache_expires_at_utc);
+          tr.appendChild(cache);
+
+          const service = document.createElement("td");
+          service.textContent = text(item?.service_url);
+          tr.appendChild(service);
+
+          const mode = document.createElement("td");
+          mode.textContent = text(item?.evidence_mode);
+          tr.appendChild(mode);
+
+          const report = document.createElement("td");
+          const rowSlug = typeof item?.slug === "string" ? item.slug.trim() : "";
+          if (rowSlug) {
+            const a = document.createElement("a");
+            a.href = "/report?slug=" + encodeURIComponent(rowSlug);
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.textContent = "Open";
+            report.appendChild(a);
+          } else {
+            report.textContent = "—";
+          }
+          tr.appendChild(report);
+
+          tbody.appendChild(tr);
+        }
+      }
+
+      function render() {
+        const history = resolveHistory();
+        const filtered = applyFilters(history);
+        renderRows(filtered);
+      }
+
+      function wireFilters() {
+        document.getElementById("slugFilter").addEventListener("input", render);
+        document.getElementById("confidenceFilter").addEventListener("change", render);
+        document.getElementById("timeFilter").addEventListener("change", render);
+      }
+
+      wireFilters();
+      render();
     </script>
   </body>
 </html>`;
@@ -399,6 +776,13 @@ const server = http.createServer(async (req, res) => {
     const slug = url.searchParams.get("slug")?.trim() ?? "";
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderReportPage(slug));
+    return;
+  }
+  if (url.pathname === "/history") {
+    const raw = url.searchParams.get("history");
+    const initialHistory = parseHistoryParam(raw);
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(renderHistoryPage(initialHistory));
     return;
   }
   if (url.pathname !== "/analyze") {
