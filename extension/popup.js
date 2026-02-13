@@ -1,4 +1,4 @@
-const DEFAULT_SERVICE_BASE = "http://127.0.0.1:8787";
+﻿const DEFAULT_SERVICE_BASE = "http://127.0.0.1:8787";
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
 import { UiStates, transition, deriveUi, computeControls } from "./popup_state.mjs";
@@ -40,22 +40,22 @@ let currentSlug = null;
 let activeTabSlug = null;
 
 function dashIfEmpty(value) {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "string") return value.trim() === "" ? "—" : value;
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "string") return value.trim() === "" ? "-" : value;
   return String(value);
 }
 
 function formatUpdated(timestamp) {
-  if (!timestamp) return "—";
+  if (!timestamp) return "-";
   try {
     return new Date(timestamp).toLocaleString();
   } catch {
-    return "—";
+    return "-";
   }
 }
 
 function formatHistoryTime(timestampUtc) {
-  if (!timestampUtc || typeof timestampUtc !== "string") return "вЂ”";
+  if (!timestampUtc || typeof timestampUtc !== "string") return "-";
   try {
     return new Date(timestampUtc).toLocaleString([], {
       month: "short",
@@ -64,14 +64,14 @@ function formatHistoryTime(timestampUtc) {
       minute: "2-digit",
     });
   } catch {
-    return "вЂ”";
+    return "-";
   }
 }
 
 function shortSlug(slug) {
-  if (typeof slug !== "string") return "вЂ”";
+  if (typeof slug !== "string") return "-";
   const clean = slug.trim();
-  if (!clean) return "вЂ”";
+  if (!clean) return "-";
   return clean.length > 30 ? `${clean.slice(0, 27)}...` : clean;
 }
 
@@ -86,9 +86,9 @@ function isAllowedServiceUrl(value) {
 }
 
 function formatShortContext(value) {
-  if (typeof value !== "string") return "—";
+  if (typeof value !== "string") return "-";
   const single = value.replace(/\s+/g, " ").trim();
-  if (!single) return "—";
+  if (!single) return "-";
   return single.length > 120 ? `${single.slice(0, 117)}...` : single;
 }
 
@@ -126,9 +126,9 @@ function renderMeta(slug, updated) {
   if (openFullReportButton) {
     openFullReportButton.disabled = !currentSlug;
   }
-  const slugText = slug ? `Slug: ${slug}` : "Slug: —";
-  const updatedText = updated ? `Updated: ${formatUpdated(updated)}` : "Updated: —";
-  metaEl.textContent = `${slugText} · ${updatedText}`;
+  const slugText = slug ? `Slug: ${slug}` : "Slug: -";
+  const updatedText = updated ? `Updated: ${formatUpdated(updated)}` : "Updated: -";
+  metaEl.textContent = `${slugText} | ${updatedText}`;
 }
 
 function renderError(lastAnalysis, lastErrorMessage, lastErrorHint) {
@@ -186,8 +186,9 @@ function renderHistory(history) {
 
   if (items.length === 0) {
     const empty = document.createElement("div");
-    empty.className = "history-meta";
-    empty.textContent = "No history yet.";
+    empty.className = "empty-state";
+    empty.innerHTML =
+      '<div class="empty-state-title">No history yet</div><div class="empty-state-copy">Run analysis on a market to populate this list.</div>';
     historyListEl.appendChild(empty);
     return;
   }
@@ -202,8 +203,8 @@ function renderHistory(history) {
 
     const meta = document.createElement("div");
     meta.className = "history-meta";
-    const confidence = typeof entry?.confidence === "string" ? entry.confidence : "вЂ”";
-    meta.textContent = `${formatHistoryTime(entry?.timestamp_utc)} В· ${confidence}`;
+    const confidence = typeof entry?.confidence === "string" ? entry.confidence : "-";
+    meta.textContent = `${formatHistoryTime(entry?.timestamp_utc)} | ${confidence}`;
 
     const button = document.createElement("button");
     button.className = "secondary history-action";
@@ -538,3 +539,8 @@ async function syncAvailability() {
 
 loadFromStorage();
 syncAvailability();
+
+
+
+
+

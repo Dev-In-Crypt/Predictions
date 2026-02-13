@@ -3,7 +3,7 @@ import http from "node:http";
 import { analyzeMarket } from "./analyzer.js";
 
 const SCHEMA_VERSION = "1.0";
-const SERVICE_VERSION = "1.0.0";
+const SERVICE_VERSION = "8.0.0";
 
 function buildServiceError(message: string, errorCode = "BAD_REQUEST") {
   const timestamp = new Date().toISOString();
@@ -54,29 +54,30 @@ function renderReportPage(slug: string): string {
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+        font: 14px/1.5 "Sora", "Segoe UI", system-ui, sans-serif;
         color: var(--ink);
         background: var(--bg);
       }
       .wrap {
-        max-width: 1040px;
-        margin: 24px auto;
-        padding: 0 16px 24px;
+        max-width: 920px;
+        margin: 16px auto;
+        padding: 0 12px 20px;
       }
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 12px;
-        padding: 14px;
-        margin-bottom: 14px;
+        padding: 12px;
+        margin-bottom: 10px;
+        box-shadow: 0 1px 0 rgba(32, 29, 24, 0.04);
       }
-      h1 { font-size: 20px; margin: 0 0 8px; }
-      h2 { font-size: 16px; margin: 0 0 8px; }
+      h1 { font-size: 19px; margin: 0 0 6px; }
+      h2 { font-size: 15px; margin: 0 0 8px; }
       .muted { color: var(--muted); }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px;
       }
       .kv {
         border: 1px solid var(--line);
@@ -125,6 +126,24 @@ function renderReportPage(slug: string): string {
         color: var(--muted);
       }
       .hidden { display: none; }
+      .empty-state {
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        color: var(--muted);
+        background: #fbfaf7;
+      }
+      .empty-state strong {
+        display: block;
+        color: var(--ink);
+        margin-bottom: 2px;
+      }
+      @media (max-width: 720px) {
+        body { font-size: 13px; }
+        .wrap { padding: 0 10px 16px; }
+        .card { padding: 10px; }
+        .v { font-size: 14px; }
+      }
     </style>
   </head>
   <body>
@@ -253,7 +272,7 @@ function renderReportPage(slug: string): string {
         const keyFacts = document.getElementById("keyFacts");
         const facts = asArray(full?.key_facts);
         if (facts.length === 0) {
-          keyFacts.textContent = "No key facts.";
+          keyFacts.innerHTML = '<div class="empty-state"><strong>No key facts yet</strong>Run analysis on a market with richer source evidence.</div>';
         } else {
           for (const fact of facts) {
             const block = document.createElement("div");
@@ -296,7 +315,7 @@ function renderReportPage(slug: string): string {
 
         const sourcesEl = document.getElementById("sources");
         if (sources.length === 0) {
-          sourcesEl.textContent = "No sources.";
+          sourcesEl.innerHTML = '<div class="empty-state"><strong>No sources captured</strong>The analyzer response did not include source records for this run.</div>';
         } else {
           for (const source of sources) {
             const item = document.createElement("div");
@@ -476,32 +495,40 @@ function renderHistoryPage(initialHistory: Array<Record<string, unknown>>): stri
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+        font: 14px/1.5 "Sora", "Segoe UI", system-ui, sans-serif;
         color: var(--ink);
         background: var(--bg);
       }
       .wrap {
-        max-width: 1040px;
-        margin: 24px auto;
-        padding: 0 16px 24px;
+        max-width: 920px;
+        margin: 16px auto;
+        padding: 0 12px 20px;
       }
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 12px;
-        padding: 14px;
-        margin-bottom: 14px;
+        padding: 12px;
+        margin-bottom: 10px;
+        box-shadow: 0 1px 0 rgba(32, 29, 24, 0.04);
       }
-      h1 { font-size: 20px; margin: 0 0 8px; }
+      h1 { font-size: 19px; margin: 0 0 6px; }
       .muted { color: var(--muted); }
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
       table {
         width: 100%;
         border-collapse: collapse;
+        min-width: 900px;
+        background: #fff;
       }
       th, td {
         border-bottom: 1px solid var(--line);
         text-align: left;
-        padding: 8px 6px;
+        padding: 9px 8px;
         vertical-align: top;
       }
       th {
@@ -512,7 +539,18 @@ function renderHistoryPage(initialHistory: Array<Record<string, unknown>>): stri
       }
       a { color: var(--accent); }
       code { background: #f1eee8; border-radius: 6px; padding: 2px 6px; }
-      .empty { color: var(--muted); }
+      .empty {
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        color: var(--muted);
+        background: #fbfaf7;
+      }
+      .empty strong {
+        display: block;
+        color: var(--ink);
+        margin-bottom: 2px;
+      }
       .filters {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -526,13 +564,18 @@ function renderHistoryPage(initialHistory: Array<Record<string, unknown>>): stri
         padding: 8px 10px;
         font-size: 12px;
       }
+      @media (max-width: 720px) {
+        body { font-size: 13px; }
+        .wrap { padding: 0 10px 16px; }
+        .card { padding: 10px; }
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="card">
         <h1>Polymarket Analysis History</h1>
-        <div class="muted">Loaded from extension history payload.</div>
+        <div class="muted">Loaded from extension history payload (up to 20 most recent entries).</div>
       </div>
       <div class="card">
         <div class="filters">
@@ -550,24 +593,26 @@ function renderHistoryPage(initialHistory: Array<Record<string, unknown>>): stri
             <option value="30d">Last 30d</option>
           </select>
         </div>
-        <div id="empty" class="empty">No history items.</div>
-        <table id="table" hidden>
-          <thead>
-            <tr>
-              <th>Slug</th>
-              <th>Timestamp (UTC)</th>
-              <th>YES %</th>
-              <th>NO %</th>
-              <th>Confidence</th>
-              <th>Request ID</th>
-              <th>Cache Expires</th>
-              <th>Service URL</th>
-              <th>Evidence Mode</th>
-              <th>Report</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
+        <div id="empty" class="empty"><strong>No history yet</strong>Run analysis in the extension popup to start tracking results.</div>
+        <div id="tableWrap" class="table-wrap" hidden>
+          <table id="table">
+            <thead>
+              <tr>
+                <th>Slug</th>
+                <th>Timestamp (UTC)</th>
+                <th>YES %</th>
+                <th>NO %</th>
+                <th>Confidence</th>
+                <th>Request ID</th>
+                <th>Cache Expires</th>
+                <th>Service URL</th>
+                <th>Evidence Mode</th>
+                <th>Report</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -633,17 +678,21 @@ function renderHistoryPage(initialHistory: Array<Record<string, unknown>>): stri
 
       function renderRows(history) {
         const emptyEl = document.getElementById("empty");
+        const tableWrapEl = document.getElementById("tableWrap");
         const tableEl = document.getElementById("table");
         const tbody = document.getElementById("tbody");
         tbody.textContent = "";
 
         if (history.length === 0) {
-          emptyEl.textContent = "No history items.";
+          emptyEl.innerHTML = "<strong>No matching rows</strong>Try widening your filters or run analysis on another market.";
+          emptyEl.hidden = false;
+          tableWrapEl.hidden = true;
           tableEl.hidden = true;
           return;
         }
 
         emptyEl.hidden = true;
+        tableWrapEl.hidden = false;
         tableEl.hidden = false;
 
         for (const item of history) {

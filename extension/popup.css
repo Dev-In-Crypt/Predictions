@@ -22,49 +22,53 @@ body {
 }
 
 .app {
-  width: 360px;
-  padding: 16px;
+  width: 372px;
+  padding: 14px;
 }
 
 header {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
+  gap: 5px;
+  margin-bottom: 10px;
 }
 
 .title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
 .meta-line {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
 }
 
 .hint {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--error);
-  font-weight: 600;
+  font-weight: 700;
+  border: 1px solid rgba(179, 38, 30, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(179, 38, 30, 0.06);
 }
 
 .block {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
 }
 
 .row {
   display: grid;
   grid-template-columns: 120px 1fr;
-  gap: 8px;
+  gap: 7px;
   align-items: start;
   font-size: 12px;
-  padding: 6px 0;
+  padding: 5px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -133,7 +137,7 @@ header {
 .controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .controls-actions {
@@ -150,11 +154,11 @@ header {
 }
 
 .settings {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
-  padding: 10px 12px;
+  padding: 10px;
 }
 
 .settings summary {
@@ -264,7 +268,7 @@ header {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .history-view-all {
@@ -277,15 +281,15 @@ header {
 .history-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .history-item {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px;
+  padding: 7px;
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .history-meta {
@@ -305,4 +309,23 @@ header {
   justify-self: start;
   padding: 6px 10px;
   font-size: 11px;
+}
+
+.empty-state {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fcfbf8;
+}
+
+.empty-state-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.empty-state-copy {
+  font-size: 11px;
+  color: var(--muted);
 }
