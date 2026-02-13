@@ -1,4 +1,4 @@
-﻿const DEFAULT_SERVICE_BASE = "http://127.0.0.1:8787";
+const DEFAULT_SERVICE_BASE = "http://127.0.0.1:8787";
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
 import { UiStates, transition, deriveUi, computeControls } from "./popup_state.mjs";
@@ -15,21 +15,12 @@ const errorEl = document.getElementById("error");
 const serviceVersionEl = document.getElementById("serviceVersion");
 const extensionVersionEl = document.getElementById("extensionVersion");
 
-const estimateEl = document.getElementById("estimate");
-const rangeEl = document.getElementById("range");
+const yesPctEl = document.getElementById("yesPct");
+const noPctEl = document.getElementById("noPct");
 const confidenceEl = document.getElementById("confidence");
-const takeEl = document.getElementById("take");
-const driversProEl = document.getElementById("driversPro");
-const driversConEl = document.getElementById("driversCon");
-const cacheHitEl = document.getElementById("cacheHit");
-const cacheExpiresEl = document.getElementById("cacheExpires");
-const requestIdEl = document.getElementById("requestId");
-
-const errorStepEl = document.getElementById("errorStep");
-const errorCodeEl = document.getElementById("errorCode");
+const contextLineEl = document.getElementById("contextLine");
+const openFullReportButton = document.getElementById("openFullReport");
 const errorMessageEl = document.getElementById("errorMessage");
-const errorHintEl = document.getElementById("errorHint");
-const errorRequestIdEl = document.getElementById("errorRequestId");
 
 const serviceUrlInput = document.getElementById("serviceUrl");
 const saveServiceButton = document.getElementById("saveService");
@@ -41,7 +32,10 @@ const clearDataButton = document.getElementById("clearData");
 let uiState = UiStates.IDLE;
 let serviceOk = false;
 let onPolymarket = false;
+let contentReady = null;
 let lastErrorLabel = null;
+let currentSlug = null;
+let activeTabSlug = null;
 
 function dashIfEmpty(value) {
   if (value === null || value === undefined) return "—";
@@ -58,21 +52,28 @@ function formatUpdated(timestamp) {
   }
 }
 
-function formatLines(value, maxLines = 2) {
-  if (!value) return "—";
-  if (Array.isArray(value)) {
-    const lines = value.filter(Boolean).slice(0, maxLines);
-    return lines.length ? lines.join("\n") : "—";
+function isAllowedServiceUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:") return false;
+    return parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+  } catch {
+    return false;
   }
-  if (typeof value === "string") {
-    const lines = value
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, maxLines);
-    return lines.length ? lines.join("\n") : "—";
-  }
-  return "—";
+}
+
+function formatShortContext(value) {
+  if (typeof value !== "string") return "—";
+  const single = value.replace(/\s+/g, " ").trim();
+  if (!single) return "—";
+  return single.length > 120 ? `${single.slice(0, 117)}...` : single;
+}
+
+function formatPercentValue(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  const clamped = Math.max(0, Math.min(100, value));
+  const rounded = Math.round(clamped * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
 }
 
 function setStatus(text, isError = false) {
@@ -82,13 +83,14 @@ function setStatus(text, isError = false) {
 }
 
 function applyUiState() {
-  const ui = deriveUi(uiState, { serviceOk, onPolymarket, errorLabel: lastErrorLabel });
+  const ui = deriveUi(uiState, { serviceOk, onPolymarket, contentReady, errorLabel: lastErrorLabel });
   setStatus(ui.status, ui.isError);
 
   const controls = computeControls({
     state: uiState,
     serviceOk,
     onPolymarket,
+    contentReady,
     errorLabel: lastErrorLabel,
   });
   runButton.disabled = controls.analyzeDisabled;
@@ -97,6 +99,10 @@ function applyUiState() {
 }
 
 function renderMeta(slug, updated) {
+  currentSlug = slug || null;
+  if (openFullReportButton) {
+    openFullReportButton.disabled = !currentSlug;
+  }
   const slugText = slug ? `Slug: ${slug}` : "Slug: —";
   const updatedText = updated ? `Updated: ${formatUpdated(updated)}` : "Updated: —";
   metaEl.textContent = `${slugText} · ${updatedText}`;
@@ -105,12 +111,7 @@ function renderMeta(slug, updated) {
 function renderError(lastAnalysis, lastErrorMessage, lastErrorHint) {
   successEl.classList.add("hidden");
   errorEl.classList.remove("hidden");
-
-  errorRequestIdEl.textContent = dashIfEmpty(lastAnalysis?.request_id);
-  errorStepEl.textContent = dashIfEmpty(lastAnalysis?.step);
-  errorCodeEl.textContent = dashIfEmpty(lastAnalysis?.error_code);
-  errorMessageEl.textContent = dashIfEmpty(lastErrorMessage ?? lastAnalysis?.message ?? "Analysis failed.");
-  errorHintEl.textContent = dashIfEmpty(lastErrorHint ?? "Try again or restart the service.");
+  errorMessageEl.textContent = dashIfEmpty(lastErrorMessage ?? lastAnalysis?.message ?? lastErrorHint ?? "Analysis failed.");
 }
 
 function renderSuccess(lastAnalysis) {
@@ -118,17 +119,14 @@ function renderSuccess(lastAnalysis) {
   successEl.classList.remove("hidden");
 
   const quickView = lastAnalysis?.quick_view ?? {};
-  const cache = lastAnalysis?.cache ?? {};
+  const yesRaw = quickView?.estimate_yes_pct ?? quickView?.estimate_yes;
+  const yes = typeof yesRaw === "number" ? yesRaw : Number.parseFloat(yesRaw);
+  const no = Number.isFinite(yes) ? 100 - yes : NaN;
 
-  requestIdEl.textContent = dashIfEmpty(lastAnalysis?.request_id);
-  estimateEl.textContent = dashIfEmpty(quickView?.estimate_yes_pct ?? quickView?.estimate_yes);
-  rangeEl.textContent = dashIfEmpty(quickView?.range_yes_pct ?? quickView?.range_yes);
+  yesPctEl.textContent = dashIfEmpty(formatPercentValue(yes));
+  noPctEl.textContent = dashIfEmpty(formatPercentValue(no));
   confidenceEl.textContent = dashIfEmpty(quickView?.confidence);
-  takeEl.textContent = dashIfEmpty(quickView?.one_sentence_take ?? quickView?.summary);
-  driversProEl.textContent = formatLines(quickView?.top_drivers_pro ?? quickView?.drivers_pro);
-  driversConEl.textContent = formatLines(quickView?.top_drivers_con ?? quickView?.drivers_con);
-  cacheHitEl.textContent = dashIfEmpty(cache?.hit);
-  cacheExpiresEl.textContent = dashIfEmpty(cache?.expires_at_utc);
+  contextLineEl.textContent = formatShortContext(quickView?.one_sentence_take ?? quickView?.summary);
 }
 
 function renderAnalysis(data) {
@@ -144,6 +142,15 @@ function renderAnalysis(data) {
   }
 
   if (lastAnalysis?.status === "error") {
+    if (
+      lastAnalysis?.error_code === "CONTENT_SCRIPT_UNAVAILABLE" &&
+      onPolymarket &&
+      contentReady === false
+    ) {
+      successEl.classList.add("hidden");
+      errorEl.classList.add("hidden");
+      return;
+    }
     renderError(lastAnalysis, lastErrorMessage, lastErrorHint);
   } else {
     renderSuccess(lastAnalysis);
@@ -180,6 +187,21 @@ function isPolymarketEventUrl(url) {
     return parsed.pathname.startsWith("/event/");
   } catch {
     return false;
+  }
+}
+
+function extractPolymarketSlug(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith("polymarket.com")) return null;
+    const marker = "/event/";
+    const idx = parsed.pathname.indexOf(marker);
+    if (idx === -1) return null;
+    const slug = parsed.pathname.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+    return slug || null;
+  } catch {
+    return null;
   }
 }
 
@@ -222,6 +244,14 @@ async function healthCheckViaBackground() {
   return { ok: true, payload: response.payload };
 }
 
+async function checkContentReadyViaBackground() {
+  const response = await chrome.runtime.sendMessage({ type: "CHECK_CONTENT_SCRIPT" });
+  if (!response?.ok) {
+    return { ok: false, ready: false };
+  }
+  return { ok: true, ready: response?.ready === true };
+}
+
 async function runAnalysisViaBackground() {
   const response = await chrome.runtime.sendMessage({ type: "RUN_ANALYSIS" });
   if (!response?.ok) {
@@ -239,6 +269,24 @@ async function cancelAnalysisViaBackground() {
     throw new Error(response?.error ?? "No active analysis.");
   }
   return response;
+}
+
+async function getServiceBase() {
+  const data = await chrome.storage.local.get(["service_url"]);
+  const raw = typeof data?.service_url === "string" ? data.service_url.trim() : "";
+  if (!raw) return DEFAULT_SERVICE_BASE;
+  return raw.replace(/\/$/, "");
+}
+
+async function openFullReport() {
+  const slug = activeTabSlug || currentSlug;
+  if (!slug) return;
+  const base = await getServiceBase();
+  const data = await chrome.storage.local.get(["last_analysis", "last_slug"]);
+  const payload = data?.last_slug === slug ? data?.last_analysis : null;
+  const hash = payload ? `#payload=${encodeURIComponent(JSON.stringify(payload))}` : "";
+  const url = `${base}/report?slug=${encodeURIComponent(slug)}${hash}`;
+  await chrome.tabs.create({ url });
 }
 
 async function runAnalysis() {
@@ -265,7 +313,7 @@ async function runAnalysis() {
     if (response?.cancelled) {
       lastErrorLabel = "Cancelled";
     }
-  } catch (err) {
+  } catch {
     uiState = transition(uiState, "ANALYZE_ERROR");
     lastErrorLabel = "Error";
     await loadFromStorage();
@@ -277,6 +325,11 @@ async function runAnalysis() {
 async function saveServiceUrl() {
   const raw = serviceUrlInput.value.trim();
   const url = raw.length > 0 ? raw.replace(/\/$/, "") : DEFAULT_SERVICE_BASE;
+  if (!isAllowedServiceUrl(url)) {
+    serviceStatusEl.textContent = "Use http://127.0.0.1:<port> or http://localhost:<port>";
+    serviceStatusEl.classList.remove("muted");
+    return;
+  }
   await chrome.storage.local.set({ service_url: url });
   serviceUrlInput.value = url;
   await syncAvailability();
@@ -298,6 +351,8 @@ async function copyDebug() {
     timestamp_utc: analysis.timestamp_utc ?? null,
     last_updated: data?.last_updated ?? null,
     cache_expires_at_utc: analysis?.cache?.expires_at_utc ?? null,
+    sources_count: Array.isArray(analysis?.sources) ? analysis.sources.length : 0,
+    sources_missing: analysis?.sources_missing === true,
     service_url: (data?.service_url || DEFAULT_SERVICE_BASE).replace(/\/$/, ""),
     extension_version: EXTENSION_VERSION,
     service_version: data?.last_service_version ?? null,
@@ -347,7 +402,7 @@ cancelButton.addEventListener("click", async () => {
     await cancelAnalysisViaBackground();
     uiState = transition(uiState, "ANALYZE_ERROR");
     lastErrorLabel = "Cancelled";
-  } catch (err) {
+  } catch {
     uiState = transition(uiState, "ANALYZE_ERROR");
     lastErrorLabel = "Error";
   } finally {
@@ -359,6 +414,7 @@ saveServiceButton.addEventListener("click", saveServiceUrl);
 testHealthButton.addEventListener("click", testHealth);
 copyDebugButton.addEventListener("click", copyDebug);
 clearDataButton.addEventListener("click", clearData);
+openFullReportButton.addEventListener("click", openFullReport);
 
 async function syncAvailability() {
   uiState = transition(uiState, "CHECK_START");
@@ -369,12 +425,19 @@ async function syncAvailability() {
 
   serviceOk = health.ok;
   onPolymarket = Boolean(tab?.id && isPolymarketEventUrl(tab.url));
+  activeTabSlug = onPolymarket ? extractPolymarketSlug(tab?.url) : null;
+  contentReady = null;
+  if (onPolymarket) {
+    const content = await checkContentReadyViaBackground();
+    contentReady = content.ready;
+  }
 
   if (health?.payload?.service_version) {
     await chrome.storage.local.set({ last_service_version: health.payload.service_version });
     serviceVersionEl.textContent = dashIfEmpty(health.payload.service_version);
   }
 
+  await loadFromStorage();
   uiState = transition(uiState, health.ok ? "CHECK_OK" : "CHECK_FAIL");
   applyUiState();
 }

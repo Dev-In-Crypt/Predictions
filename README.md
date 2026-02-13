@@ -90,9 +90,11 @@ npm run smoke:health && npm run smoke:service
 ```
 
 ## Troubleshooting
-- **Service offline**: Ensure `npm run service` is running. Check the popup for `Service: offline` and the OFF badge.
-- **Wrong URL**: Open “Service settings” in the popup and confirm the Service URL is correct and reachable.
+- **Service offline**: Ensure npm run service is running. Check the popup for Service: offline and the OFF badge.
+- **Wrong URL**: Open "Service settings" in the popup and confirm the Service URL is correct and reachable.
 - **Smokes failing**: Start the service in Terminal A and rerun the smoke commands in Terminal B.
+- **EADDRINUSE (port already in use)**: Stop the process using that port, or run the service on a different port (set ANALYZER_PORT) and update the extension Service URL to match.
+- **npm run dev fails with EPERM**: This is environment-dependent in some setups. Use npm run build plus npm run service as the local workflow.
 
 ### Manual: extension flow checklist (content → background → service → chrome.storage)
 Use these 5 gold slugs (one includes `/`):
@@ -124,6 +126,7 @@ Checklist per slug:
 ## Notes
 - Outputs JSON when the model responds with a structured report.
 - If JSON is invalid or violates schema, it retries once with a stricter instruction.
+- Local/generated artifacts are intentionally git-ignored (for example: `.cache/`, `runs/`, `dist/`, logs, `*.crx`, `*.pem`, and local env files).
 
 ## Gold Slugs & Regression
 ### Build gold slugs
@@ -149,3 +152,5 @@ node scripts/regenerate_metrics.mjs --outputs run_outputs_gold.json --gold data\
 ### Metrics outputs
 - `metrics_summary_gold.json` (overall + per-slug metrics)
 - `metrics_partial_gold.json` (per-slug metrics only)
+
+

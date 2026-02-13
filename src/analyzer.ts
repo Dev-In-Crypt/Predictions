@@ -4,7 +4,6 @@ import { fetchMarketData } from "./marketFetcher.js";
 import { requestPrediction } from "./aiClient.js";
 import { DEFAULT_PROMPT } from "./prompt.js";
 import { formatPercent, readEnv, safeJsonParse } from "./utils.js";
-import type { SearchResult } from "./searchClient.js";
 
 const SCHEMA_VERSION = "1.0";
 const DEFAULT_CACHE_TTL_SEC = 1800;
@@ -47,6 +46,7 @@ export interface AnalysisInput {
   id?: string;
   eventSlug?: string;
   marketIndex?: number;
+  sources?: unknown;
 }
 
 function shouldDebug(): boolean {
@@ -111,20 +111,217 @@ function buildPrompt(template: string, params: Record<string, string>): string {
   return output;
 }
 
-function summarizeSources(sources: SearchResult[]): string {
+type SourceItem = {
+  source_id?: string;
+  url?: string;
+  title?: string;
+  snippet?: string;
+  description?: string;
+  resolution_criteria?: string;
+  domain?: string;
+  published_date?: string;
+  tier?: "tier1" | "tier2" | "tier3" | "unknown";
+  captured_at_utc?: string;
+  retrieved_at_utc?: string;
+  type?: string;
+  label?: string;
+};
+
+const ALLOWED_TIERS = new Set(["tier1", "tier2", "tier3", "unknown"]);
+const TIER1_DOMAINS = [
+  "reuters.com",
+  "apnews.com",
+  "bbc.com",
+  "nytimes.com",
+  "wsj.com",
+  "ft.com",
+  "bloomberg.com",
+  "economist.com",
+];
+const TIER2_DOMAINS = [
+  "cnn.com",
+  "theguardian.com",
+  "washingtonpost.com",
+  "politico.com",
+  "axios.com",
+  "npr.org",
+  "cnbc.com",
+  "usatoday.com",
+  "latimes.com",
+];
+const MAX_TITLE = 200;
+const MAX_SNIPPET = 1200;
+const MAX_DESCRIPTION = 2000;
+const MAX_RESOLUTION = 1200;
+const MAX_LABEL = 120;
+
+function inferTier(domain: string): SourceItem["tier"] {
+  if (!domain) return "unknown";
+  if (TIER1_DOMAINS.some((d) => domain.endsWith(d))) return "tier1";
+  if (TIER2_DOMAINS.some((d) => domain.endsWith(d))) return "tier2";
+  if (domain.endsWith(".gov") || domain.endsWith(".edu") || domain.endsWith(".int")) return "tier1";
+  return "tier3";
+}
+
+function normalizeInputSources(input: unknown): { sources: SourceItem[]; malformed: boolean } {
+  if (input === undefined || input === null) return { sources: [], malformed: false };
+  if (!Array.isArray(input)) return { sources: [], malformed: true };
+
+  const clampText = (value: string | undefined, max: number): string | undefined => {
+    if (!value) return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+  };
+
+  const hash = (value: string): string => {
+    let h = 5381;
+    for (let i = 0; i < value.length; i += 1) {
+      h = (h * 33) ^ value.charCodeAt(i);
+    }
+    return (h >>> 0).toString(16);
+  };
+
+  const derivePageSourceId = (url: string): string | undefined => {
+    try {
+      const parsed = new URL(url);
+      if (!parsed.hostname.endsWith("polymarket.com")) return undefined;
+      const marker = "/event/";
+      const idx = parsed.pathname.indexOf(marker);
+      if (idx === -1) return undefined;
+      const slug = parsed.pathname.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+      if (!slug) return undefined;
+      return `page:polymarket:${slug}`;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const normalized: SourceItem[] = [];
+  let malformed = false;
+  const nowIso = new Date().toISOString();
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") {
+      malformed = true;
+      continue;
+    }
+    const obj = raw as Record<string, unknown>;
+    const url = typeof obj.url === "string" ? obj.url.trim() : "";
+    if (!url) {
+      malformed = true;
+      continue;
+    }
+    const title = clampText(typeof obj.title === "string" ? obj.title : undefined, MAX_TITLE);
+    const snippet = clampText(typeof obj.snippet === "string" ? obj.snippet : undefined, MAX_SNIPPET);
+    let domain = typeof obj.domain === "string" ? obj.domain.trim() : "";
+    if (!domain && url) {
+      try {
+        domain = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        domain = "";
+      }
+    }
+    const publishedRaw =
+      typeof obj.published_date === "string"
+        ? obj.published_date.trim()
+        : typeof obj.publishedDate === "string"
+          ? obj.publishedDate.trim()
+          : undefined;
+    const tierRaw = typeof obj.tier === "string" ? obj.tier.trim() : undefined;
+    const tier =
+      tierRaw && ALLOWED_TIERS.has(tierRaw)
+        ? (tierRaw as SourceItem["tier"])
+        : inferTier(domain || "");
+
+    const description = clampText(
+      typeof obj.description === "string" ? obj.description : undefined,
+      MAX_DESCRIPTION,
+    );
+    const resolutionCriteria = clampText(
+      typeof obj.resolution_criteria === "string" ? obj.resolution_criteria : undefined,
+      MAX_RESOLUTION,
+    );
+
+    let sourceId = typeof obj.source_id === "string" ? obj.source_id.trim() : undefined;
+    const type = typeof obj.type === "string" ? obj.type.trim() : undefined;
+    if (!sourceId) {
+      if (type === "page") {
+        sourceId = derivePageSourceId(url) ?? `page:${hash(normalizeUrl(url))}`;
+      } else {
+        sourceId = `url:${hash(normalizeUrl(url))}`;
+      }
+    }
+
+    const capturedAt =
+      typeof obj.captured_at_utc === "string"
+        ? obj.captured_at_utc.trim()
+        : typeof obj.capturedAtUtc === "string"
+          ? obj.capturedAtUtc.trim()
+          : undefined;
+    const retrievedAt =
+      typeof obj.retrieved_at_utc === "string"
+        ? obj.retrieved_at_utc.trim()
+        : typeof obj.retrievedAtUtc === "string"
+          ? obj.retrievedAtUtc.trim()
+          : undefined;
+    const ensuredCaptured = capturedAt || retrievedAt ? capturedAt : type === "page" ? nowIso : undefined;
+    const ensuredRetrieved = retrievedAt || capturedAt ? retrievedAt : type === "page" ? undefined : nowIso;
+
+    normalized.push({
+      source_id: sourceId,
+      url,
+      title,
+      snippet,
+      description,
+      resolution_criteria: resolutionCriteria,
+      domain: domain || undefined,
+      published_date: publishedRaw,
+      tier,
+      captured_at_utc: ensuredCaptured,
+      retrieved_at_utc: ensuredRetrieved,
+      type,
+      label: clampText(typeof obj.label === "string" ? obj.label : undefined, MAX_LABEL),
+    });
+  }
+
+  const fingerprint = (source: SourceItem): string => {
+    const data = [
+      normalizeUrl(source.url ?? ""),
+      source.title ?? "",
+      source.snippet ?? "",
+      source.description ?? "",
+      source.resolution_criteria ?? "",
+      source.published_date ?? "",
+    ].join("|");
+    return hash(data);
+  };
+
+  const deduped = new Map<string, SourceItem>();
+  for (const source of normalized) {
+    const key = `${normalizeUrl(source.url ?? "")}::${fingerprint(source)}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, source);
+    }
+  }
+
+  return { sources: Array.from(deduped.values()), malformed };
+}
+
+function summarizeSources(sources: SourceItem[]): string {
   if (sources.length === 0) return "count=0 tiers={} newest=unknown";
   const tiers: Record<string, number> = {};
   let newest: string | undefined;
   for (const s of sources) {
-    tiers[s.tier] = (tiers[s.tier] ?? 0) + 1;
-    if (s.publishedDate) {
-      if (!newest || Date.parse(s.publishedDate) > Date.parse(newest)) newest = s.publishedDate;
+    const tier = s.tier ?? "unknown";
+    tiers[tier] = (tiers[tier] ?? 0) + 1;
+    if (s.published_date) {
+      if (!newest || Date.parse(s.published_date) > Date.parse(newest)) newest = s.published_date;
     }
   }
   return `count=${sources.length} tiers=${JSON.stringify(tiers)} newest=${newest ?? "unknown"}`;
 }
 
-function evidenceQuality(sources: SearchResult[]): {
+function evidenceQuality(sources: SourceItem[]): {
   sourceCount: number;
   bestTier: string;
   recencySummary: string;
@@ -133,7 +330,7 @@ function evidenceQuality(sources: SearchResult[]): {
   if (sources.length === 0) {
     return { sourceCount: 0, bestTier: "unknown", recencySummary: "unknown", conflictsDetected: [] };
   }
-  const tiers = sources.map((s) => s.tier);
+  const tiers = sources.map((s) => s.tier ?? "unknown");
   const bestTier = tiers.includes("tier1")
     ? "tier1"
     : tiers.includes("tier2")
@@ -141,7 +338,7 @@ function evidenceQuality(sources: SearchResult[]): {
       : tiers.includes("tier3")
         ? "tier3"
         : "unknown";
-  const recencySummary = sources.some((s) => s.publishedDate) ? "mixed" : "unknown";
+  const recencySummary = sources.some((s) => s.published_date) ? "mixed" : "unknown";
   return { sourceCount: sources.length, bestTier, recencySummary, conflictsDetected: [] };
 }
 
@@ -178,6 +375,152 @@ function sanitizeUnsupportedStrings(obj: unknown): unknown {
     return out;
   }
   return obj;
+}
+
+function ensureStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => typeof item === "string");
+}
+
+function applyOutputSourceDefaults(
+  payload: Record<string, unknown>,
+  sources: SourceItem[],
+  options?: { forceSourcesMissing?: boolean },
+): Record<string, unknown> {
+  if (!Array.isArray(payload.sources)) {
+    payload.sources = sources;
+  }
+
+  if (typeof payload.sources_used_count !== "number") {
+    payload.sources_used_count = Array.isArray(payload.sources) ? (payload.sources as unknown[]).length : 0;
+  }
+
+  if (typeof payload.sources_missing !== "boolean") {
+    const count = typeof payload.sources_used_count === "number" ? payload.sources_used_count : 0;
+    payload.sources_missing = count === 0;
+  }
+  if (options?.forceSourcesMissing) {
+    payload.sources_missing = true;
+  }
+
+  const full = (payload.full_report as Record<string, unknown>) ?? {};
+  const keyFacts = Array.isArray(full.key_facts) ? (full.key_facts as Record<string, unknown>[]) : null;
+  if (keyFacts) {
+    for (const item of keyFacts) {
+      if (!Array.isArray(item?.support_ids)) {
+        item.support_ids = [];
+      }
+    }
+  }
+
+  if (payload.sources_missing === true) {
+    const riskFlags = ensureStringArray(full.risk_flags);
+    if (!riskFlags.includes("sources_missing")) {
+      riskFlags.push("sources_missing");
+    }
+    full.risk_flags = riskFlags;
+  }
+
+  payload.full_report = full;
+  return payload;
+}
+
+function normalizeUrl(value: string): string {
+  return value.trim().replace(/\/+$/g, "").toLowerCase();
+}
+
+function enforceKeyFactSupport(
+  payload: Record<string, unknown>,
+  sources: SourceItem[],
+): { payload: Record<string, unknown>; usedSourceIds: string[] } {
+  const full = (payload.full_report as Record<string, unknown>) ?? {};
+  const keyFacts = Array.isArray(full.key_facts) ? (full.key_facts as Record<string, unknown>[]) : null;
+  if (!keyFacts) return { payload, usedSourceIds: [] };
+
+  const sourceById = new Map<string, SourceItem>();
+  const sourceByUrl = new Map<string, SourceItem>();
+  for (const source of sources) {
+    if (typeof source.source_id === "string" && source.source_id.trim()) {
+      sourceById.set(source.source_id.trim(), source);
+    }
+    if (typeof source.url === "string" && source.url.trim()) {
+      sourceByUrl.set(normalizeUrl(source.url), source);
+    }
+  }
+
+  const usedIds = new Set<string>();
+  const filtered: Record<string, unknown>[] = [];
+  for (const item of keyFacts) {
+    const rawSources = ensureStringArray(item.sources);
+    const supportIds: string[] = [];
+    for (const ref of rawSources) {
+      const matchById = sourceById.get(ref);
+      if (matchById?.source_id) {
+        supportIds.push(matchById.source_id);
+        usedIds.add(matchById.source_id);
+        continue;
+      }
+      const matchByUrl = sourceByUrl.get(normalizeUrl(ref));
+      if (matchByUrl?.source_id) {
+        supportIds.push(matchByUrl.source_id);
+        usedIds.add(matchByUrl.source_id);
+        continue;
+      }
+      if (matchByUrl?.url) {
+        supportIds.push(matchByUrl.url);
+        usedIds.add(matchByUrl.url);
+      }
+    }
+    if (supportIds.length > 0) {
+      item.support_ids = Array.from(new Set(supportIds));
+      filtered.push(item);
+    }
+  }
+
+  full.key_facts = filtered;
+  payload.full_report = full;
+  return { payload, usedSourceIds: Array.from(usedIds) };
+}
+
+const CONFIDENCE_ORDER = ["low", "medium", "high"];
+
+function lowerConfidence(confidence: string, steps = 1): string {
+  const idx = CONFIDENCE_ORDER.indexOf(confidence);
+  if (idx === -1) return confidence;
+  return CONFIDENCE_ORDER[Math.max(0, idx - steps)];
+}
+
+function applyTieringSignals(payload: Record<string, unknown>, sources: SourceItem[]): Record<string, unknown> {
+  const full = (payload.full_report as Record<string, unknown>) ?? {};
+  const quick = (payload.quick_view as Record<string, unknown>) ?? {};
+  const confidence = typeof quick.confidence === "string" ? quick.confidence : undefined;
+
+  const sourcesMissing = payload.sources_missing === true || sources.length === 0;
+  const weakSources =
+    !sourcesMissing &&
+    sources.length > 0 &&
+    sources.every((s) => {
+      const tier = s.tier ?? "unknown";
+      return tier === "tier3" || tier === "unknown";
+    });
+
+  if (sourcesMissing && confidence) {
+    quick.confidence = "low";
+  } else if (weakSources && confidence) {
+    quick.confidence = lowerConfidence(confidence, 1);
+  }
+
+  if (weakSources) {
+    const riskFlags = ensureStringArray(full.risk_flags);
+    if (!riskFlags.includes("weak_sources")) {
+      riskFlags.push("weak_sources");
+    }
+    full.risk_flags = riskFlags;
+  }
+
+  payload.quick_view = quick;
+  payload.full_report = full;
+  return payload;
 }
 
 async function withRetries<T>(
@@ -287,6 +630,8 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
   const cached = await readCache(cacheKey);
   if (cached) {
     debugLog("cache: hit");
+    const cachedSources = Array.isArray(cached.payload.sources) ? (cached.payload.sources as SourceItem[]) : [];
+    cached.payload = applyOutputSourceDefaults(cached.payload as Record<string, unknown>, cachedSources);
     cached.payload.resolved_via = resolvedVia;
     cached.payload.schema_version = SCHEMA_VERSION;
     cached.payload.cache = {
@@ -483,7 +828,7 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
         const outcomeSummary = formatOutcomeSummary(market.outcomes, market.outcomePrices);
         const promptTemplate = await loadPromptTemplate();
 
-        const sources: SearchResult[] = [];
+        const { sources, malformed: sourcesMalformed } = normalizeInputSources(input.sources);
 
         debugLog(`sources: ${summarizeSources(sources)}`);
 
@@ -497,9 +842,9 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
                     `title: ${s.title}\n` +
                     `snippet: ${s.snippet}\n` +
                     `url: ${s.url}\n` +
-                    `published_date: ${s.publishedDate ?? "unknown"}\n` +
-                    `domain: ${s.domain}\n` +
-                    `tier: ${s.tier}`,
+                    `published_date: ${s.published_date ?? "unknown"}\n` +
+                    `domain: ${s.domain ?? "unknown"}\n` +
+                    `tier: ${s.tier ?? "unknown"}`,
                 )
                 .join("\n\n");
 
@@ -570,6 +915,13 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
         let structured = safeJsonParse<Record<string, unknown>>(prediction.rawText);
         if (structured && typeof structured === "object") {
           structured = sanitizeUnsupportedStrings(structured) as Record<string, unknown>;
+          structured = applyOutputSourceDefaults(structured, sources, {
+            forceSourcesMissing: sourcesMalformed && sources.length === 0,
+          }) as Record<string, unknown>;
+          const enforced = enforceKeyFactSupport(structured, sources);
+          structured = enforced.payload;
+          structured.sources_used_count = enforced.usedSourceIds.length;
+          structured = applyTieringSignals(structured, sources);
         } else {
           return withEnvelopeMeta(
             {

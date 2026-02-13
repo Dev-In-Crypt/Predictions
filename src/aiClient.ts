@@ -169,13 +169,17 @@ export async function requestPrediction(
     const timeoutId =
       params.timeoutMs && controller ? setTimeout(() => controller.abort(), params.timeoutMs) : undefined;
 
-    const res = await fetch(`${baseUrl}${endpoint}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(bodyPayload),
-      signal: controller?.signal,
-    });
-    if (timeoutId) clearTimeout(timeoutId);
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}${endpoint}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(bodyPayload),
+        signal: controller?.signal,
+      });
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
 
     if (!res.ok) {
       const text = await res.text();

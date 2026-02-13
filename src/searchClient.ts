@@ -105,14 +105,18 @@ export async function searchBrave(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), opts.timeoutMs);
     const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=20`;
-    const res = await fetch(url, {
-      headers: {
-        "Accept": "application/json",
-        "X-Subscription-Token": apiKey,
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: {
+          "Accept": "application/json",
+          "X-Subscription-Token": apiKey,
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Brave search error (${res.status}): ${text}`);

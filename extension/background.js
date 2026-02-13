@@ -4,6 +4,8 @@ const HEALTH_POLL_MINUTES = 1;
 const HEALTH_ALARM = "health_poll";
 const SCHEMA_VERSION = "1.0";
 const activeJobs = new Map();
+let healthFailureCount = 0;
+let healthOkEffective = true;
 
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -12,6 +14,14 @@ async function getActiveTab() {
 
 async function requestSlug(tabId) {
   return await chrome.tabs.sendMessage(tabId, { type: "GET_POLYMARKET_SLUG" });
+}
+
+async function requestPageSource(tabId) {
+  return await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_SOURCE" });
+}
+
+async function pingContentScript(tabId) {
+  return await chrome.tabs.sendMessage(tabId, { type: "PING_CONTENT_SCRIPT" });
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs) {
@@ -37,15 +47,30 @@ async function getServiceBase() {
   const stored = await chrome.storage.local.get(["service_url"]);
   const url = stored?.service_url;
   if (typeof url === "string" && url.trim().length > 0) {
-    return url.trim().replace(/\/$/, "");
+    const candidate = url.trim().replace(/\/$/, "");
+    try {
+      const parsed = new URL(candidate);
+      const hostAllowed = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+      if (parsed.protocol === "http:" && hostAllowed) {
+        return candidate;
+      }
+    } catch {
+      // Ignore invalid URL and fall back to default.
+    }
   }
   return DEFAULT_SERVICE_BASE;
 }
 
-async function analyzeSlug(slug, signal) {
+async function analyzeSlug(slug, signal, sources) {
   const base = await getServiceBase();
   const url = `${base}/analyze?slug=${encodeURIComponent(slug)}`;
-  const res = await fetch(url, { signal });
+  const hasSources = Array.isArray(sources) && sources.length > 0;
+  const res = await fetch(url, {
+    method: hasSources ? "POST" : "GET",
+    headers: hasSources ? { "Content-Type": "application/json" } : undefined,
+    body: hasSources ? JSON.stringify({ sources }) : undefined,
+    signal,
+  });
   const text = await res.text();
   try {
     return JSON.parse(text);
@@ -77,6 +102,10 @@ function compactSuccess(result) {
     timestamp_utc: result?.timestamp_utc ?? null,
     resolved_via: result?.resolved_via ?? null,
     request_id: result?.request_id ?? null,
+    sources: Array.isArray(result?.sources) ? result.sources : [],
+    sources_used_count:
+      typeof result?.sources_used_count === "number" ? result.sources_used_count : 0,
+    sources_missing: result?.sources_missing === true,
   };
 }
 
@@ -127,6 +156,23 @@ function clearBadge() {
   chrome.action.setBadgeText({ text: "" });
 }
 
+function recordHealth(healthOk) {
+  if (healthOk) {
+    healthFailureCount = 0;
+    healthOkEffective = true;
+    return healthOkEffective;
+  }
+  healthFailureCount += 1;
+  if (healthFailureCount >= 2) {
+    healthOkEffective = false;
+  }
+  return healthOkEffective;
+}
+
+function getHealthEffective() {
+  return healthOkEffective;
+}
+
 async function evaluateBadge({ healthOk, analysisStatus }) {
   if (!healthOk) {
     setBadgeOff();
@@ -164,7 +210,8 @@ async function initializeBadge() {
     chrome.storage.local.get(["last_analysis"]),
   ]);
   const analysisStatus = getStoredAnalysisStatus(stored);
-  await evaluateBadge({ healthOk: health.ok, analysisStatus });
+  const effectiveHealth = recordHealth(health.ok);
+  await evaluateBadge({ healthOk: effectiveHealth, analysisStatus });
 }
 
 async function pollHealthAndUpdate() {
@@ -172,7 +219,8 @@ async function pollHealthAndUpdate() {
     checkHealth(),
     chrome.storage.local.get(["last_analysis"]),
   ]);
-  await evaluateBadge({ healthOk: health.ok, analysisStatus: getStoredAnalysisStatus(stored) });
+  const effectiveHealth = recordHealth(health.ok);
+  await evaluateBadge({ healthOk: effectiveHealth, analysisStatus: getStoredAnalysisStatus(stored) });
   await chrome.storage.local.set({
     last_service_ok: health.ok,
     last_service_checked: Date.now(),
@@ -191,7 +239,7 @@ async function storeError({ slug, message, hint, errorCode, setOfflineBadge, bad
   });
   await notifyResult(slug ?? "", errorPayload);
   await evaluateBadge({
-    healthOk: !setOfflineBadge,
+    healthOk: getHealthEffective(),
     analysisStatus: badgeStatus ?? "error",
   });
 }
@@ -226,10 +274,33 @@ async function getCachedResult(slug) {
 function cancelActiveJob(tabId, reason) {
   const job = activeJobs.get(tabId);
   if (!job) return false;
+  job.cancelled = true;
   job.controller.abort(reason);
   activeJobs.delete(tabId);
   return true;
 }
+
+function isAbortLike(err) {
+  if (!err) return false;
+  const name = err?.name ?? "";
+  const message = err?.message ?? "";
+  if (name === "AbortError") return true;
+  const lower = String(message).toLowerCase();
+  return lower.includes("superseded") || lower.includes("cancelled") || lower.includes("canceled");
+}
+
+self.addEventListener("unhandledrejection", (event) => {
+  if (isAbortLike(event?.reason)) {
+    event.preventDefault();
+  }
+});
+
+self.addEventListener("error", (event) => {
+  const message = event?.message ?? "";
+  if (isAbortLike({ message })) {
+    event.preventDefault();
+  }
+});
 
 async function runAnalysisForActiveTab() {
   const tab = await getActiveTab();
@@ -242,7 +313,7 @@ async function runAnalysisForActiveTab() {
       setOfflineBadge: false,
       badgeStatus: "error",
     });
-    throw new Error("No active tab found.");
+    return { ok: false, error: "No active tab found." };
   }
 
   let slug;
@@ -258,7 +329,7 @@ async function runAnalysisForActiveTab() {
       setOfflineBadge: false,
       badgeStatus: "error",
     });
-    throw new Error("Failed to contact content script.");
+    return { ok: false, error: "Failed to contact content script." };
   }
 
   if (!slug) {
@@ -270,24 +341,58 @@ async function runAnalysisForActiveTab() {
       setOfflineBadge: false,
       badgeStatus: "error",
     });
-    throw new Error("No Polymarket slug found.");
+    return { ok: false, error: "No Polymarket slug found." };
   }
 
   cancelActiveJob(tab.id, "superseded");
 
-  const cached = await getCachedResult(slug);
-  if (cached) {
-    await notifyResult(slug, cached);
-    await evaluateBadge({ healthOk: true, analysisStatus: cached?.status });
-    return { slug, result: cached, cached: true };
-  }
+    const cached = await getCachedResult(slug);
+    if (cached) {
+      await notifyResult(slug, cached);
+      await evaluateBadge({ healthOk: getHealthEffective(), analysisStatus: cached?.status });
+      return { ok: true, resultStatus: cached?.status ?? "success", cached: true };
+    }
 
   const controller = new AbortController();
   const jobId = `${tab.id}-${Date.now()}`;
-  activeJobs.set(tab.id, { controller, jobId, slug });
+  activeJobs.set(tab.id, { controller, jobId, slug, cancelled: false });
 
   try {
-    const result = await analyzeSlug(slug, controller.signal);
+    let sources = [];
+    try {
+      const page = await requestPageSource(tab.id);
+      const source = page?.source;
+      const url = typeof source?.url === "string" ? source.url.trim() : "";
+      if (url) {
+        let domain = "";
+        try {
+          domain = new URL(url).hostname.replace(/^www\./, "");
+        } catch {
+          domain = "";
+        }
+        sources = [
+          {
+            source_id: `page:polymarket:${slug}`,
+            url,
+            title: typeof source?.title === "string" ? source.title.trim() : undefined,
+            snippet: typeof source?.snippet === "string" ? source.snippet.trim() : undefined,
+            description: typeof source?.description === "string" ? source.description.trim() : undefined,
+            resolution_criteria:
+              typeof source?.resolution_criteria === "string" ? source.resolution_criteria.trim() : undefined,
+            captured_at_utc:
+              typeof source?.captured_at_utc === "string" ? source.captured_at_utc.trim() : new Date().toISOString(),
+            domain: domain || undefined,
+            tier: "tier1",
+            type: "page",
+            label: "Polymarket event page",
+          },
+        ];
+      }
+    } catch (err) {
+      sources = [];
+    }
+
+    const result = await analyzeSlug(slug, controller.signal, sources);
     if (activeJobs.get(tab.id)?.jobId === jobId) {
       activeJobs.delete(tab.id);
     }
@@ -308,24 +413,24 @@ async function runAnalysisForActiveTab() {
     }
 
     await notifyResult(slug, compact);
-    await evaluateBadge({ healthOk: true, analysisStatus: compact?.status });
-    return { slug, result: compact };
+    await evaluateBadge({ healthOk: getHealthEffective(), analysisStatus: compact?.status });
+    return { ok: true, resultStatus: compact?.status ?? "success", cached: false };
   } catch (err) {
     if (activeJobs.get(tab.id)?.jobId === jobId) {
       activeJobs.delete(tab.id);
     }
-    if (err?.name === "AbortError" || err?.message === "superseded") {
-      throw err;
+    if (controller.signal.aborted) {
+      return { ok: false, cancelled: true };
     }
     await storeError({
       slug,
       message: "Analyzer request failed.",
       hint: "Run: npm run service",
       errorCode: "ANALYZER_UNREACHABLE",
-      setOfflineBadge: true,
+      setOfflineBadge: false,
       badgeStatus: "error",
     });
-    throw err;
+    return { ok: false, error: "Analyzer request failed." };
   }
 }
 
@@ -357,16 +462,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "RUN_ANALYSIS") {
     (async () => {
-      const data = await runAnalysisForActiveTab();
-      return { ok: true, resultStatus: data.result?.status ?? "success", cached: data.cached ?? false };
+      return await runAnalysisForActiveTab();
     })()
       .then(sendResponse)
       .catch((err) => {
-        if (err?.name === "AbortError" || err?.message === "superseded") {
+        if (isAbortLike(err)) {
           sendResponse({ ok: false, cancelled: true });
           return;
         }
-        console.error("Popup analysis failed.", err);
         sendResponse({ ok: false, error: err?.message ?? String(err) });
       });
     return true;
@@ -376,7 +479,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const health = await checkHealth();
       const stored = await chrome.storage.local.get(["last_analysis"]);
-      await evaluateBadge({ healthOk: health.ok, analysisStatus: getStoredAnalysisStatus(stored) });
+      const effectiveHealth = recordHealth(health.ok);
+      await evaluateBadge({ healthOk: effectiveHealth, analysisStatus: getStoredAnalysisStatus(stored) });
       await chrome.storage.local.set({
         last_service_ok: health.ok,
         last_service_checked: Date.now(),
@@ -406,6 +510,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((err) => {
         sendResponse({ ok: false, error: err?.message ?? String(err) });
+      });
+    return true;
+  }
+
+  if (message?.type === "CHECK_CONTENT_SCRIPT") {
+    (async () => {
+      const tab = await getActiveTab();
+      if (!tab?.id) {
+        return { ok: false, ready: false, error: "No active tab." };
+      }
+      try {
+        const response = await pingContentScript(tab.id);
+        return { ok: true, ready: response?.ok === true };
+      } catch {
+        return { ok: true, ready: false };
+      }
+    })()
+      .then(sendResponse)
+      .catch((err) => {
+        sendResponse({ ok: false, ready: false, error: err?.message ?? String(err) });
       });
     return true;
   }

@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "description": "Minimal MV3 bridge to local analyzer service.",
   "permissions": ["activeTab", "storage", "alarms"],
-  "host_permissions": ["http://127.0.0.1:8787/*"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
   "action": {
     "default_title": "Analyze market",
     "default_popup": "popup.html"

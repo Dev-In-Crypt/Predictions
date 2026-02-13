@@ -25,7 +25,7 @@ export function transition(state, event) {
   }
 }
 
-export function deriveUi(state, { serviceOk, onPolymarket, errorLabel } = {}) {
+export function deriveUi(state, { serviceOk, onPolymarket, contentReady, errorLabel } = {}) {
   let status = "Idle";
   let isError = false;
 
@@ -57,19 +57,30 @@ export function deriveUi(state, { serviceOk, onPolymarket, errorLabel } = {}) {
     status = "Open a Polymarket event page";
     isError = true;
   }
+  if (
+    serviceOk &&
+    onPolymarket &&
+    contentReady === false &&
+    state !== UiStates.ANALYZING &&
+    state !== UiStates.CHECKING
+  ) {
+    status = "Reload tab after extension reload";
+    isError = true;
+  }
 
   return { status, isError };
 }
 
-export function computeControls({ state, serviceOk, onPolymarket, errorLabel }) {
+export function computeControls({ state, serviceOk, onPolymarket, contentReady, errorLabel }) {
   const analyzeDisabled =
     state === UiStates.CHECKING ||
     state === UiStates.ANALYZING ||
     !serviceOk ||
-    !onPolymarket;
+    !onPolymarket ||
+    contentReady === false;
 
   const showRetry =
-    state === UiStates.ERROR && serviceOk && onPolymarket && errorLabel !== "Cancelled";
+    state === UiStates.ERROR && serviceOk && onPolymarket && contentReady !== false && errorLabel !== "Cancelled";
   const showCancel = state === UiStates.ANALYZING;
 
   return { analyzeDisabled, showRetry, showCancel };
