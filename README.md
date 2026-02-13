@@ -1,4 +1,4 @@
-# Polymarket Market Analysis MVP
+# Polymarket Analyzer MVP
 
 Minimal Node.js/TypeScript script that fetches Polymarket market data, sends it to an LLM, and prints a structured JSON report.
 
