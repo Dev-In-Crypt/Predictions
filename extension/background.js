@@ -26,6 +26,31 @@ async function pingContentScript(tabId) {
   return await chrome.tabs.sendMessage(tabId, { type: "PING_CONTENT_SCRIPT" });
 }
 
+async function ensureContentScriptReady(tabId) {
+  try {
+    const response = await pingContentScript(tabId);
+    if (response?.ok === true) return { ok: true };
+  } catch {
+    // try injection below
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+
+  try {
+    const response = await pingContentScript(tabId);
+    return { ok: response?.ok === true, error: response?.ok === true ? null : "Ping failed after inject." };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
 async function fetchJsonWithTimeout(url, timeoutMs) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -386,15 +411,32 @@ async function runAnalysisForActiveTab() {
     const response = await requestSlug(tab.id);
     slug = response?.slug;
   } catch (err) {
-    await storeError({
-      slug: null,
-      message: "Failed to contact content script.",
-      hint: "Reload the Polymarket page and try again.",
-      errorCode: "CONTENT_SCRIPT_UNAVAILABLE",
-      setOfflineBadge: false,
-      badgeStatus: "error",
-    });
-    return { ok: false, error: "Failed to contact content script." };
+    const ensured = await ensureContentScriptReady(tab.id);
+    if (!ensured.ok) {
+      await storeError({
+        slug: null,
+        message: "Failed to contact content script.",
+        hint: "Reload the Polymarket page and try again.",
+        errorCode: "CONTENT_SCRIPT_UNAVAILABLE",
+        setOfflineBadge: false,
+        badgeStatus: "error",
+      });
+      return { ok: false, error: "Failed to contact content script." };
+    }
+    try {
+      const response = await requestSlug(tab.id);
+      slug = response?.slug;
+    } catch {
+      await storeError({
+        slug: null,
+        message: "Failed to contact content script.",
+        hint: "Reload the Polymarket page and try again.",
+        errorCode: "CONTENT_SCRIPT_UNAVAILABLE",
+        setOfflineBadge: false,
+        badgeStatus: "error",
+      });
+      return { ok: false, error: "Failed to contact content script." };
+    }
   }
 
   if (!slug) {
@@ -587,12 +629,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!tab?.id) {
         return { ok: false, ready: false, error: "No active tab." };
       }
-      try {
-        const response = await pingContentScript(tab.id);
-        return { ok: true, ready: response?.ok === true };
-      } catch {
-        return { ok: true, ready: false };
-      }
+      const ensured = await ensureContentScriptReady(tab.id);
+      return { ok: true, ready: ensured.ok === true };
     })()
       .then(sendResponse)
       .catch((err) => {

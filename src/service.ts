@@ -138,6 +138,24 @@ function renderReportPage(slug: string): string {
         color: var(--ink);
         margin-bottom: 2px;
       }
+      .debug-details {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: #fbfaf7;
+      }
+      .debug-details > summary {
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .debug-details > .grid {
+        margin-top: 8px;
+      }
       @media (max-width: 720px) {
         body { font-size: 13px; }
         .wrap { padding: 0 10px 16px; }
@@ -169,6 +187,10 @@ function renderReportPage(slug: string): string {
         <div class="card">
           <h2>Market Snapshot & Metadata</h2>
           <div id="snapshot" class="grid"></div>
+          <details class="debug-details">
+            <summary>Debug details</summary>
+            <div id="debugSnapshot" class="grid"></div>
+          </details>
         </div>
 
         <div class="card">
@@ -237,6 +259,24 @@ function renderReportPage(slug: string): string {
         container.appendChild(box);
       }
 
+      function formatUtcTimestamp(value) {
+        if (!value) return "—";
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return "—";
+        const year = d.getUTCFullYear();
+        const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+        const day = String(d.getUTCDate()).padStart(2, "0");
+        const hours = String(d.getUTCHours()).padStart(2, "0");
+        const minutes = String(d.getUTCMinutes()).padStart(2, "0");
+        return year + "-" + month + "-" + day + " " + hours + ":" + minutes + " UTC";
+      }
+
+      function formatSourcesMissing(value) {
+        return value
+          ? "External sources: missing or unavailable"
+          : "External sources: available";
+      }
+
       function render(payload) {
         currentPayload = payload;
         const quick = payload?.quick_view ?? {};
@@ -251,20 +291,24 @@ function renderReportPage(slug: string): string {
         }
 
         const snapshot = document.getElementById("snapshot");
+        const debugSnapshot = document.getElementById("debugSnapshot");
+        snapshot.innerHTML = "";
+        debugSnapshot.innerHTML = "";
         addSnapshotItem(snapshot, "Estimate YES %", quick?.estimate_yes_pct);
         addSnapshotItem(snapshot, "Market YES %", quick?.market_yes_pct);
         addSnapshotItem(snapshot, "Delta vs Market", quick?.delta_vs_market_pp);
         addSnapshotItem(snapshot, "Confidence", quick?.confidence);
-        addSnapshotItem(snapshot, "Range YES %", JSON.stringify(quick?.range_yes_pct ?? []));
         addSnapshotItem(snapshot, "One sentence", quick?.one_sentence_take ?? quick?.summary);
-        addSnapshotItem(snapshot, "Request ID", payload?.request_id);
-        addSnapshotItem(snapshot, "Schema", payload?.schema_version);
-        addSnapshotItem(snapshot, "Timestamp", payload?.timestamp_utc);
-        addSnapshotItem(snapshot, "Resolved via", payload?.resolved_via);
-        addSnapshotItem(snapshot, "Cache hit", payload?.cache?.hit);
-        addSnapshotItem(snapshot, "Cache expires", payload?.cache?.expires_at_utc);
+        addSnapshotItem(snapshot, "Updated", formatUtcTimestamp(payload?.timestamp_utc));
         addSnapshotItem(snapshot, "Sources used", renderedSourcesCount);
-        addSnapshotItem(snapshot, "Sources missing", payload?.sources_missing);
+        addSnapshotItem(snapshot, "Sources missing", formatSourcesMissing(payload?.sources_missing));
+
+        addSnapshotItem(debugSnapshot, "Request ID", payload?.request_id);
+        addSnapshotItem(debugSnapshot, "Schema", payload?.schema_version);
+        addSnapshotItem(debugSnapshot, "Resolved via", payload?.resolved_via);
+        addSnapshotItem(debugSnapshot, "Cache hit", payload?.cache?.hit);
+        addSnapshotItem(debugSnapshot, "Cache expires", payload?.cache?.expires_at_utc);
+        addSnapshotItem(debugSnapshot, "Range YES %", JSON.stringify(quick?.range_yes_pct ?? []));
 
         addList("proArgs", quick?.top_drivers?.pro);
         addList("conArgs", quick?.top_drivers?.con);
