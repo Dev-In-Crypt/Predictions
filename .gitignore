@@ -39,3 +39,4 @@ Thumbs.db
 *.db
 *.tgz
 *.zip
+backups/

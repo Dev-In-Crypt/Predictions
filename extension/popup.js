@@ -421,6 +421,18 @@ async function saveServiceUrl() {
 }
 
 async function copyDebug() {
+  let runtimeDebug = null;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "DEBUG_SNAPSHOT" });
+    if (response?.ok) {
+      runtimeDebug = response.snapshot ?? null;
+    } else {
+      runtimeDebug = { error: response?.error ?? "Failed to collect runtime debug snapshot." };
+    }
+  } catch (err) {
+    runtimeDebug = { error: err?.message ?? String(err) };
+  }
+
   const data = await chrome.storage.local.get([
     "last_analysis",
     "last_slug",
@@ -443,6 +455,7 @@ async function copyDebug() {
     extension_version: EXTENSION_VERSION,
     service_version: data?.last_service_version ?? null,
     history_count: Array.isArray(data?.analysis_history) ? data.analysis_history.length : 0,
+    runtime_debug: runtimeDebug,
   };
   const text = JSON.stringify(payload, null, 2);
   await navigator.clipboard.writeText(text);

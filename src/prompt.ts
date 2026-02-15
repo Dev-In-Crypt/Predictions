@@ -34,6 +34,7 @@ Every factual claim must include at least one source URL.
 If sources contradict, explicitly state the conflict and reduce confidence.
 
 Prefer higher-tier and more recent sources. Use social sources only as "unverified".
+If tier is unknown but source text is usable, still use it with reduced confidence.
 
 Market discipline
 
@@ -44,11 +45,15 @@ Market price is a strong signal when evidence is limited, but it is not proof.
 If evidence is missing/weak, do not deviate materially from market price.
 
 Missing/weak sources mode (critical)
-If sources are empty OR fewer than 3 credible sources:
+If sources are empty OR fewer than 3 usable sources:
+
+Usable source definition:
+- A source with non-empty URL plus at least one non-empty text field (title or snippet or description).
+- Tier may be tier1/tier2/unknown. Unknown tier does NOT make a source unusable.
 
 Set confidence = low
 
-Set estimate_yes_pct = market_yes_pct (or within ±1 pp)
+Set estimate_yes_pct = market_yes_pct (or within +-1 pp)
 
 Widen range moderately (minimum width 5 pp, but keep within [0,100])
 
@@ -125,13 +130,13 @@ Return JSON (strict)
 
 Size constraints
 
-key_facts: 4–8 max (0 if no sources)
+key_facts: 4-8 max (0 if no sources)
 
-scenarios: 2–3 max (0–2 if low evidence)
+scenarios: 2-3 max (0-2 if low evidence)
 
-risks: 2–6 max
+risks: 2-6 max
 
-watch_for: 3–6 max
+watch_for: 3-6 max
 
 Never output empty top_drivers arrays.
 

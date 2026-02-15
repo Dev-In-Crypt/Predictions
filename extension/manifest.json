@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Polymarket Analyzer",
-  "version": "8.0.0",
+  "version": "0.1.7",
   "description": "MV3 bridge to the local Polymarket analyzer service.",
   "permissions": ["activeTab", "storage", "alarms", "scripting"],
   "host_permissions": [

@@ -8,7 +8,7 @@ import { formatPercent, readEnv, safeJsonParse } from "./utils.js";
 
 const SCHEMA_VERSION = "1.0";
 const DEFAULT_CACHE_TTL_SEC = 1800;
-const CACHE_PIPELINE_VERSION = "stage6_0";
+const CACHE_PIPELINE_VERSION = "stage6_1";
 
 export type ErrorStep = "market_fetch" | "search" | "llm" | "parse" | "validate" | "cache" | "overall";
 
@@ -342,6 +342,30 @@ function evidenceQuality(sources: SourceItem[]): {
       : "unknown";
   const recencySummary = sources.some((s) => s.published_date) ? "mixed" : "unknown";
   return { sourceCount: sources.length, bestTier, recencySummary, conflictsDetected: [] };
+}
+
+function sourceDiagnostics(sources: SourceItem[]): {
+  total: number;
+  usable: number;
+  tier1: number;
+  tier2: number;
+  unknown: number;
+} {
+  let usable = 0;
+  let tier1 = 0;
+  let tier2 = 0;
+  let unknown = 0;
+  for (const source of sources) {
+    const tier = source.tier ?? "unknown";
+    if (tier === "tier1") tier1 += 1;
+    else if (tier === "tier2") tier2 += 1;
+    else unknown += 1;
+    const hasUrl = typeof source.url === "string" && source.url.trim().length > 0;
+    const hasText = [source.title, source.snippet, source.description]
+      .some((value) => typeof value === "string" && value.trim().length > 0);
+    if (hasUrl && hasText) usable += 1;
+  }
+  return { total: sources.length, usable, tier1, tier2, unknown };
 }
 
 async function writeRunArtifacts(runId: string, artifacts: Record<string, unknown>): Promise<void> {
@@ -921,6 +945,7 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
         debugLog(`sources: ${summarizeSources(sources)}`);
 
         const evidence = evidenceQuality(sources);
+        const diagnostics = sourceDiagnostics(sources);
         const sourcesBlock =
           sources.length === 0
             ? "No sources provided."
@@ -952,7 +977,19 @@ export async function analyzeMarket(input: AnalysisInput): Promise<AnalysisResul
           sourceTier: "",
         });
 
-        const fullPrompt = `${prompt}\n\nSources (${sources.length})\n${sourcesBlock}`;
+        const diagnosticsBlock =
+          `Source diagnostics:\n` +
+          `- total_sources: ${diagnostics.total}\n` +
+          `- usable_sources: ${diagnostics.usable}\n` +
+          `- tier1_sources: ${diagnostics.tier1}\n` +
+          `- tier2_sources: ${diagnostics.tier2}\n` +
+          `- unknown_tier_sources: ${diagnostics.unknown}\n` +
+          `Rules:\n` +
+          `- Treat unknown tier as usable when URL + text are present.\n` +
+          `- Do not pin estimate to market solely because tier is unknown.\n` +
+          `- Use low confidence + market pin only when usable_sources < 3.`;
+
+        const fullPrompt = `${prompt}\n\n${diagnosticsBlock}\n\nSources (${sources.length})\n${sourcesBlock}`;
 
         let prediction;
         try {

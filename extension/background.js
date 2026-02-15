@@ -379,6 +379,79 @@ function isAbortLike(err) {
   return lower.includes("superseded") || lower.includes("cancelled") || lower.includes("canceled");
 }
 
+function isPolymarketEventUrl(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith("polymarket.com")) return false;
+    return parsed.pathname.startsWith("/event/");
+  } catch {
+    return false;
+  }
+}
+
+function extractPolymarketSlug(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith("polymarket.com")) return null;
+    const marker = "/event/";
+    const idx = parsed.pathname.indexOf(marker);
+    if (idx === -1) return null;
+    const slug = parsed.pathname.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+    return slug || null;
+  } catch {
+    return null;
+  }
+}
+
+async function collectDebugSnapshot() {
+  const tab = await getActiveTab();
+  const tabUrl = tab?.url ?? null;
+  const onPolymarket = isPolymarketEventUrl(tabUrl);
+  let contentReady = null;
+  let contentError = null;
+  if (tab?.id && onPolymarket) {
+    try {
+      const res = await pingContentScript(tab.id);
+      contentReady = res?.ok === true;
+    } catch (err) {
+      contentReady = false;
+      contentError = err?.message ?? String(err);
+    }
+  }
+  const [health, serviceBase, stored] = await Promise.all([
+    checkHealth(),
+    getServiceBase(),
+    chrome.storage.local.get(["last_slug", "last_updated", "last_error_message", "last_error_hint"]),
+  ]);
+
+  return {
+    service_base: serviceBase,
+    health_ok: health.ok,
+    health_error: health.error ?? null,
+    health_effective: healthOkEffective,
+    health_failure_count: healthFailureCount,
+    active_tab_id: tab?.id ?? null,
+    active_tab_url: tabUrl,
+    on_polymarket_event: onPolymarket,
+    active_tab_slug: extractPolymarketSlug(tabUrl),
+    content_ready: contentReady,
+    content_error: contentError,
+    active_jobs_count: activeJobs.size,
+    active_jobs: Array.from(activeJobs.entries()).map(([tabId, job]) => ({
+      tab_id: tabId,
+      slug: job?.slug ?? null,
+      cancelled: job?.cancelled === true,
+    })),
+    last_slug: stored?.last_slug ?? null,
+    last_updated: stored?.last_updated ?? null,
+    last_error_message: stored?.last_error_message ?? null,
+    last_error_hint: stored?.last_error_hint ?? null,
+    captured_at_utc: new Date().toISOString(),
+  };
+}
+
 self.addEventListener("unhandledrejection", (event) => {
   if (isAbortLike(event?.reason)) {
     event.preventDefault();
@@ -635,6 +708,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((err) => {
         sendResponse({ ok: false, ready: false, error: err?.message ?? String(err) });
+      });
+    return true;
+  }
+
+  if (message?.type === "DEBUG_SNAPSHOT") {
+    (async () => {
+      const snapshot = await collectDebugSnapshot();
+      return { ok: true, snapshot };
+    })()
+      .then(sendResponse)
+      .catch((err) => {
+        sendResponse({ ok: false, error: err?.message ?? String(err) });
       });
     return true;
   }

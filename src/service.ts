@@ -3,7 +3,7 @@ import http from "node:http";
 import { analyzeMarket } from "./analyzer.js";
 
 const SCHEMA_VERSION = "1.0";
-const SERVICE_VERSION = "8.0.0";
+const SERVICE_VERSION = "0.1.7";
 
 function buildServiceError(message: string, errorCode = "BAD_REQUEST") {
   const timestamp = new Date().toISOString();
